@@ -2,6 +2,8 @@ package com.huestone.shuddercam.camera
 
 import android.content.Context
 import android.util.Log
+import android.util.Range
+import androidx.camera.camera2.interop.Camera2CameraControl
 import androidx.camera.camera2.interop.Camera2CameraInfo
 import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import androidx.camera.core.CameraControl
@@ -13,6 +15,10 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
+import com.huestone.shuddercam.controls.CapsMirror
+import com.huestone.shuddercam.controls.ControlId
+import com.huestone.shuddercam.controls.ControlSpec
+import com.huestone.shuddercam.controls.EffectiveSettings
 
 /**
  * Lifecycle-aware camera binding. Manages a CameraX Preview use case
@@ -28,6 +34,7 @@ class CameraController(private val context: Context) {
 
     private var cameraProvider: ProcessCameraProvider? = null
     private var cameraControl: CameraControl? = null
+    private var camera2Control: Camera2CameraControl? = null
     private var preview: Preview? = null
 
     /** All probed camera capabilities, populated on bind. */
@@ -36,6 +43,10 @@ class CameraController(private val context: Context) {
 
     /** Caps for the currently bound camera (default back). */
     var activeCaps: CameraCaps? = null
+        private set
+
+    /** Control specs derived from the active camera's capabilities. */
+    var specs: Map<ControlId, ControlSpec> = emptyMap()
         private set
 
     fun bindToLifecycle(
@@ -75,10 +86,16 @@ class CameraController(private val context: Context) {
             )
 
             cameraControl = camera.cameraControl
+            camera2Control = Camera2CameraControl.from(camera.cameraControl)
 
             // Get active camera caps
             val camera2Info = Camera2CameraInfo.from(camera.cameraInfo)
             activeCaps = allCaps.find { it.cameraId == camera2Info.cameraId }
+
+            // Derive control specs from active caps
+            activeCaps?.let { caps ->
+                specs = ControlSpec.deriveAll(capsToMirror(caps))
+            }
 
             onCapsReady(allCaps)
         }, ContextCompat.getMainExecutor(context))
@@ -87,6 +104,7 @@ class CameraController(private val context: Context) {
     fun unbind() {
         cameraProvider?.unbindAll()
         cameraControl = null
+        camera2Control = null
         preview = null
     }
 
@@ -100,6 +118,39 @@ class CameraController(private val context: Context) {
         cameraControl?.startFocusAndMetering(action)
     }
 
+    /**
+     * Applies resolved effective settings to the camera via ControlApplier.
+     */
+    fun applySettings(resolved: Map<ControlId, EffectiveSettings.Resolution>) {
+        camera2Control?.let { c2c ->
+            ControlApplier.apply(c2c, resolved)
+        }
+    }
+
+    /**
+     * Converts CameraCaps to the Android-free CapsMirror for controls/ layer.
+     */
+    private fun capsToMirror(caps: CameraCaps): CapsMirror {
+        return CapsMirror(
+            sensitivityRange = caps.sensitivityRange?.let { it.lower..it.upper },
+            exposureTimeRange = caps.exposureTimeRange?.let { it.lower..it.upper },
+            aeCompensationRange = caps.aeCompensationRange?.let { it.lower..it.upper },
+            aeCompensationStep = caps.aeCompensationStep,
+            availableAeModes = caps.availableAeModes,
+            aeLockAvailable = caps.aeLockAvailable,
+            minimumFocusDistance = caps.minimumFocusDistance,
+            availableAfModes = caps.availableAfModes,
+            availableAwbModes = caps.availableAwbModes,
+            awbLockAvailable = caps.awbLockAvailable,
+            zoomRatioRange = caps.zoomRatioRange?.let { it.lower..it.upper },
+            flashAvailable = caps.flashAvailable,
+            supportedFpsRanges = caps.supportedFpsRanges.map { it.lower to it.upper },
+            availableVideoStabilizationModes = caps.availableVideoStabilizationModes,
+            availableOpticalStabilizationModes = caps.availableOpticalStabilizationModes,
+            hasRawCapability = caps.hasRawCapability
+        )
+    }
+
     private fun probeAllCameras(provider: ProcessCameraProvider): List<CameraCaps> {
         val results = mutableListOf<CameraCaps>()
         val cameraInfoList = provider.availableCameraInfos
@@ -108,10 +159,6 @@ class CameraController(private val context: Context) {
             try {
                 val camera2Info = Camera2CameraInfo.from(cameraInfo)
                 val cameraId = camera2Info.cameraId
-                val chars = camera2Info.getCameraCharacteristic(
-                    android.hardware.camera2.CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL
-                )
-                // Get full characteristics via Camera2CameraInfo
                 val caps = probeCamera(cameraId, camera2Info)
                 results.add(caps)
             } catch (e: Exception) {

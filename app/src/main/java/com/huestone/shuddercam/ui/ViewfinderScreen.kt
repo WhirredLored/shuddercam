@@ -11,13 +11,18 @@ import androidx.camera.view.PreviewView
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -27,31 +32,49 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import com.huestone.shuddercam.brand.Brand
 import com.huestone.shuddercam.camera.CameraCaps
 import com.huestone.shuddercam.camera.CameraController
+import com.huestone.shuddercam.controls.ControlId
+import com.huestone.shuddercam.controls.ControlSpec
+import com.huestone.shuddercam.controls.ControlValue
+import com.huestone.shuddercam.controls.EffectiveSettings
+import com.huestone.shuddercam.controls.Presets
+import com.huestone.shuddercam.data.Prefs
+import kotlinx.coroutines.launch
 
 @Composable
 fun ViewfinderScreen() {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+    val scope = rememberCoroutineScope()
 
     var permissionGranted by remember { mutableStateOf(false) }
     var permanentlyDenied by remember { mutableStateOf(false) }
     var hasRequestedOnce by remember { mutableStateOf(false) }
     var showDiagnostics by remember { mutableStateOf(false) }
+    var showControls by remember { mutableStateOf(false) }
     var allCaps by remember { mutableStateOf<List<CameraCaps>>(emptyList()) }
+    var specs by remember { mutableStateOf<Map<ControlId, ControlSpec>>(emptyMap()) }
+    var resolved by remember { mutableStateOf<Map<ControlId, EffectiveSettings.Resolution>>(emptyMap()) }
+
+    val prefs = remember { Prefs(context) }
+    val overrides by prefs.overrides.collectAsState(initial = emptyMap())
 
     // Check initial permission state
     LaunchedEffect(Unit) {
@@ -80,7 +103,6 @@ fun ViewfinderScreen() {
     }
 
     if (!permissionGranted) {
-        // Permission request / rationale / settings deep-link UI
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -137,8 +159,20 @@ fun ViewfinderScreen() {
             }
         }
     } else {
-        // Camera preview
         val cameraController = remember { CameraController(context) }
+
+        // Resolve and apply whenever overrides or specs change
+        LaunchedEffect(overrides, specs) {
+            if (specs.isNotEmpty()) {
+                val newResolved = EffectiveSettings.resolveAll(
+                    specs = specs,
+                    activePreset = Presets.DEVICE_AUTO,
+                    overrides = overrides
+                )
+                resolved = newResolved
+                cameraController.applySettings(newResolved)
+            }
+        }
 
         DisposableEffect(lifecycleOwner) {
             onDispose {
@@ -158,6 +192,7 @@ fun ViewfinderScreen() {
                             previewView
                         ) { caps ->
                             allCaps = caps
+                            specs = cameraController.specs
                         }
 
                         previewView.setOnTouchListener { view, event ->
@@ -174,18 +209,105 @@ fun ViewfinderScreen() {
                 }
             )
 
-            // Info icon to open diagnostics
-            IconButton(
-                onClick = { showDiagnostics = true },
+            // Top bar: exposure readout chip + info/controls icons
+            Row(
                 modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(16.dp)
+                    .align(Alignment.TopCenter)
+                    .fillMaxWidth()
+                    .padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(
-                    imageVector = Icons.Default.Info,
-                    contentDescription = "Camera Diagnostics",
-                    tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f),
-                    modifier = Modifier.size(28.dp)
+                // Exposure readout chip
+                ExposureReadout(resolved)
+
+                Spacer(modifier = Modifier.weight(1f))
+
+                // Controls toggle
+                IconButton(onClick = { showControls = !showControls }) {
+                    Icon(
+                        imageVector = Icons.Default.Tune,
+                        contentDescription = "Controls",
+                        tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f),
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+
+                // Info icon
+                IconButton(onClick = { showDiagnostics = true }) {
+                    Icon(
+                        imageVector = Icons.Default.Info,
+                        contentDescription = "Camera Diagnostics",
+                        tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f),
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+            }
+
+            // Bottom controls sheet
+            if (showControls && specs.isNotEmpty()) {
+                Box(modifier = Modifier.align(Alignment.BottomCenter)) {
+                    ControlsSheet(
+                        specs = specs,
+                        resolved = resolved,
+                        onOverride = { id, value ->
+                            scope.launch {
+                                prefs.setOverride(id, value)
+                            }
+                        }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ExposureReadout(resolved: Map<ControlId, EffectiveSettings.Resolution>) {
+    val aeRes = resolved[ControlId.AE_MODE] as? EffectiveSettings.Resolution.Resolved
+    val aeMode = (aeRes?.value as? ControlValue.IntValue)?.value ?: 1
+    val isManual = aeMode == 0
+
+    val displayParts = mutableListOf<String>()
+
+    if (isManual) {
+        val isoRes = resolved[ControlId.ISO] as? EffectiveSettings.Resolution.Resolved
+        val iso = (isoRes?.value as? ControlValue.IntValue)?.value
+        if (iso != null && iso > 0) displayParts.add("ISO $iso")
+
+        val shutterRes = resolved[ControlId.SHUTTER_NS] as? EffectiveSettings.Resolution.Resolved
+        val ns = (shutterRes?.value as? ControlValue.LongValue)?.value
+        if (ns != null && ns > 0) displayParts.add(formatShutterSpeed(ns))
+    } else {
+        displayParts.add("Auto")
+        val evRes = resolved[ControlId.AE_COMPENSATION] as? EffectiveSettings.Resolution.Resolved
+        val ev = (evRes?.value as? ControlValue.IntValue)?.value
+        if (ev != null && ev != 0) {
+            displayParts.add(if (ev > 0) "EV+$ev" else "EV$ev")
+        }
+    }
+
+    if (displayParts.isNotEmpty()) {
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(8.dp))
+                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.7f))
+                .padding(horizontal = 10.dp, vertical = 4.dp)
+        ) {
+            displayParts.forEachIndexed { index, part ->
+                if (index > 0) {
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "·",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                }
+                Text(
+                    text = part,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontWeight = FontWeight.Medium
                 )
             }
         }

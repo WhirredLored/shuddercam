@@ -8,6 +8,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import com.huestone.shuddercam.brand.Brand
 
 @Composable
 fun ViewfinderScreen() {
@@ -18,7 +19,7 @@ fun ViewfinderScreen() {
         contentAlignment = Alignment.Center
     ) {
         Text(
-            text = "ShudderCam",
+            text = Brand.APP_NAME,
             style = MaterialTheme.typography.headlineLarge,
             color = MaterialTheme.colorScheme.onBackground
         )

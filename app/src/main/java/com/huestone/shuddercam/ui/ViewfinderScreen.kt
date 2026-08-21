@@ -15,8 +15,13 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -27,18 +32,16 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
-import androidx.compose.ui.platform.LocalLifecycleOwner
 import com.huestone.shuddercam.brand.Brand
+import com.huestone.shuddercam.camera.CameraCaps
 import com.huestone.shuddercam.camera.CameraController
 
-@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun ViewfinderScreen() {
     val context = LocalContext.current
@@ -47,6 +50,8 @@ fun ViewfinderScreen() {
     var permissionGranted by remember { mutableStateOf(false) }
     var permanentlyDenied by remember { mutableStateOf(false) }
     var hasRequestedOnce by remember { mutableStateOf(false) }
+    var showDiagnostics by remember { mutableStateOf(false) }
+    var allCaps by remember { mutableStateOf<List<CameraCaps>>(emptyList()) }
 
     // Check initial permission state
     LaunchedEffect(Unit) {
@@ -64,6 +69,14 @@ fun ViewfinderScreen() {
             permanentlyDenied = true
         }
         hasRequestedOnce = true
+    }
+
+    if (showDiagnostics) {
+        DiagnosticsScreen(
+            allCaps = allCaps,
+            onBack = { showDiagnostics = false }
+        )
+        return
     }
 
     if (!permissionGranted) {
@@ -135,21 +148,17 @@ fun ViewfinderScreen() {
 
         Box(modifier = Modifier.fillMaxSize()) {
             AndroidView(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .pointerInteropFilter { event ->
-                        if (event.action == MotionEvent.ACTION_DOWN) {
-                            // Tap-to-focus will be wired to the PreviewView's metering factory
-                            true
-                        } else {
-                            false
-                        }
-                    },
+                modifier = Modifier.fillMaxSize(),
                 factory = { ctx ->
                     PreviewView(ctx).also { previewView ->
                         previewView.implementationMode =
                             PreviewView.ImplementationMode.COMPATIBLE
-                        cameraController.bindToLifecycle(lifecycleOwner, previewView)
+                        cameraController.bindToLifecycle(
+                            lifecycleOwner,
+                            previewView
+                        ) { caps ->
+                            allCaps = caps
+                        }
 
                         previewView.setOnTouchListener { view, event ->
                             if (event.action == MotionEvent.ACTION_DOWN) {
@@ -164,6 +173,21 @@ fun ViewfinderScreen() {
                     }
                 }
             )
+
+            // Info icon to open diagnostics
+            IconButton(
+                onClick = { showDiagnostics = true },
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(16.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Info,
+                    contentDescription = "Camera Diagnostics",
+                    tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f),
+                    modifier = Modifier.size(28.dp)
+                )
+            }
         }
     }
 }

@@ -40,7 +40,8 @@ import kotlin.math.roundToLong
 fun ControlsSheet(
     specs: Map<ControlId, ControlSpec>,
     resolved: Map<ControlId, EffectiveSettings.Resolution>,
-    onOverride: (ControlId, ControlValue?) -> Unit
+    onOverride: (ControlId, ControlValue?) -> Unit,
+    onFocusTouching: (Boolean) -> Unit = {}
 ) {
     Column(
         modifier = Modifier
@@ -50,6 +51,7 @@ fun ControlsSheet(
             .padding(horizontal = 16.dp, vertical = 12.dp)
     ) {
         ExposureSection(specs, resolved, onOverride)
+        FocusSection(specs, resolved, onOverride, onFocusTouching)
     }
 }
 
@@ -256,5 +258,146 @@ fun formatShutterSpeed(ns: Long): String {
             val frac = (1.0 / seconds).roundToInt()
             "1/${frac}"
         }
+    }
+}
+
+@Composable
+private fun FocusSection(
+    specs: Map<ControlId, ControlSpec>,
+    resolved: Map<ControlId, EffectiveSettings.Resolution>,
+    onOverride: (ControlId, ControlValue?) -> Unit,
+    onFocusTouching: (Boolean) -> Unit
+) {
+    val afSpec = specs[ControlId.AF_MODE]
+    if (afSpec == null || !afSpec.available) return
+
+    // Fixed-focus devices get no focus section (Law 1)
+    val fdSpec = specs[ControlId.FOCUS_DISTANCE]
+    val afModes = afSpec.allowedIntValues ?: return
+    if (afModes.isEmpty()) return
+
+    val afRes = resolved[ControlId.AF_MODE] as? EffectiveSettings.Resolution.Resolved ?: return
+    val currentAfMode = (afRes.value as? ControlValue.IntValue)?.value ?: 4
+
+    Spacer(modifier = Modifier.height(12.dp))
+    SectionLabel("Focus")
+
+    // AF mode chips: Continuous, Auto, Manual
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        // Continuous Picture (mode 4)
+        if (afModes.contains(4)) {
+            FilterChip(
+                selected = currentAfMode == 4,
+                onClick = { onOverride(ControlId.AF_MODE, ControlValue.IntValue(4)) },
+                label = { Text("Continuous") },
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
+                    selectedLabelColor = MaterialTheme.colorScheme.primary
+                )
+            )
+        }
+        // Auto (mode 1)
+        if (afModes.contains(1)) {
+            FilterChip(
+                selected = currentAfMode == 1,
+                onClick = { onOverride(ControlId.AF_MODE, ControlValue.IntValue(1)) },
+                label = { Text("Auto") },
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
+                    selectedLabelColor = MaterialTheme.colorScheme.primary
+                )
+            )
+        }
+        // Manual (mode 0) — only if device supports manual focus distance
+        if (afModes.contains(0) && fdSpec != null && fdSpec.available) {
+            FilterChip(
+                selected = currentAfMode == 0,
+                onClick = { onOverride(ControlId.AF_MODE, ControlValue.IntValue(0)) },
+                label = { Text("Manual") },
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
+                    selectedLabelColor = MaterialTheme.colorScheme.primary
+                )
+            )
+        }
+    }
+
+    Spacer(modifier = Modifier.height(8.dp))
+
+    // Manual focus distance slider — only when AF is off
+    if (currentAfMode == 0 && fdSpec != null && fdSpec.available && fdSpec.floatRange != null) {
+        val fdRes = resolved[ControlId.FOCUS_DISTANCE] as? EffectiveSettings.Resolution.Resolved
+        val currentDist = (fdRes?.value as? ControlValue.FloatValue)?.value ?: 0f
+
+        FocusDistanceSlider(
+            value = currentDist,
+            range = fdSpec.floatRange,
+            onValueChange = { newDist ->
+                onOverride(ControlId.FOCUS_DISTANCE, ControlValue.FloatValue(newDist))
+            },
+            onTouchChange = onFocusTouching
+        )
+    }
+}
+
+@Composable
+private fun FocusDistanceSlider(
+    value: Float,
+    range: ClosedFloatingPointRange<Float>,
+    onValueChange: (Float) -> Unit,
+    onTouchChange: (Boolean) -> Unit
+) {
+    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Focus Distance",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
+            )
+            Text(
+                text = formatDioptersAsMeters(value),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary,
+                fontWeight = FontWeight.Medium
+            )
+        }
+        Slider(
+            value = value.coerceIn(range),
+            onValueChange = { newVal ->
+                onTouchChange(true)
+                onValueChange(newVal)
+            },
+            onValueChangeFinished = {
+                onTouchChange(false)
+            },
+            valueRange = range,
+            colors = SliderDefaults.colors(
+                thumbColor = MaterialTheme.colorScheme.primary,
+                activeTrackColor = MaterialTheme.colorScheme.primary,
+                inactiveTrackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f)
+            )
+        )
+    }
+}
+
+/**
+ * Converts diopters (focus distance) to a human-readable meters label.
+ * 0 diopters = infinity; higher diopters = closer.
+ */
+private fun formatDioptersAsMeters(diopters: Float): String {
+    if (diopters <= 0.01f) return "∞"
+    val meters = 1.0f / diopters
+    return when {
+        meters >= 5f -> String.format("%.0fm", meters)
+        meters >= 1f -> String.format("%.1fm", meters)
+        meters >= 0.1f -> String.format("%.0fcm", meters * 100)
+        else -> "macro"
     }
 }

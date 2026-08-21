@@ -97,6 +97,37 @@ object ControlApplier {
             }
         }
 
+        // ── Focus family (C07) ──
+
+        // AF_MODE
+        val afRes = resolved[ControlId.AF_MODE]
+        if (afRes is EffectiveSettings.Resolution.Resolved) {
+            val afMode = (afRes.value as? ControlValue.IntValue)?.value
+            if (afMode != null) {
+                builder.setCaptureRequestOption(CaptureRequest.CONTROL_AF_MODE, afMode)
+                applied = true
+                if (afRes.wasClamped) Log.w(TAG, "AF_MODE clamped to $afMode")
+            }
+        }
+
+        // Determine if AF is off (manual focus)
+        val isMf = (afRes as? EffectiveSettings.Resolution.Resolved)
+            ?.let { (it.value as? ControlValue.IntValue)?.value == 0 }
+            ?: false
+
+        if (isMf) {
+            // FOCUS_DISTANCE (LENS_FOCUS_DISTANCE) — only when AF is off
+            val fdRes = resolved[ControlId.FOCUS_DISTANCE]
+            if (fdRes is EffectiveSettings.Resolution.Resolved) {
+                val dist = (fdRes.value as? ControlValue.FloatValue)?.value
+                if (dist != null) {
+                    builder.setCaptureRequestOption(CaptureRequest.LENS_FOCUS_DISTANCE, dist)
+                    applied = true
+                    if (fdRes.wasClamped) Log.w(TAG, "FOCUS_DISTANCE clamped to $dist")
+                }
+            }
+        }
+
         if (applied) {
             camera2Control.setCaptureRequestOptions(builder.build())
         }

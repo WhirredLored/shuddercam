@@ -69,12 +69,17 @@ fun ViewfinderScreen() {
     var hasRequestedOnce by remember { mutableStateOf(false) }
     var showDiagnostics by remember { mutableStateOf(false) }
     var showControls by remember { mutableStateOf(false) }
+    var isFocusTouching by remember { mutableStateOf(false) }
     var allCaps by remember { mutableStateOf<List<CameraCaps>>(emptyList()) }
     var specs by remember { mutableStateOf<Map<ControlId, ControlSpec>>(emptyMap()) }
     var resolved by remember { mutableStateOf<Map<ControlId, EffectiveSettings.Resolution>>(emptyMap()) }
 
     val prefs = remember { Prefs(context) }
     val overrides by prefs.overrides.collectAsState(initial = emptyMap())
+
+    // Check if in Manual Focus mode (AF_MODE == 0)
+    val afRes = resolved[ControlId.AF_MODE] as? EffectiveSettings.Resolution.Resolved
+    val isMf = (afRes?.value as? ControlValue.IntValue)?.value == 0
 
     // Check initial permission state
     LaunchedEffect(Unit) {
@@ -197,9 +202,12 @@ fun ViewfinderScreen() {
 
                         previewView.setOnTouchListener { view, event ->
                             if (event.action == MotionEvent.ACTION_DOWN) {
-                                val factory = previewView.meteringPointFactory
-                                cameraController.tapToFocus(factory, event.x, event.y)
-                                view.performClick()
+                                // Tap-to-focus fires only when NOT in manual focus mode
+                                if (!isMf) {
+                                    val factory = previewView.meteringPointFactory
+                                    cameraController.tapToFocus(factory, event.x, event.y)
+                                    view.performClick()
+                                }
                                 true
                             } else {
                                 false
@@ -208,6 +216,37 @@ fun ViewfinderScreen() {
                     }
                 }
             )
+
+            // Center MF Loupe Assist Overlay when adjusting manual focus slider
+            if (isFocusTouching) {
+                Box(
+                    modifier = Modifier
+                        .size(140.dp)
+                        .align(Alignment.Center)
+                        .clip(RoundedCornerShape(70.dp))
+                        .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.85f))
+                        .padding(12.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            text = "FOCUS LOUPE",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        val fdRes = resolved[ControlId.FOCUS_DISTANCE] as? EffectiveSettings.Resolution.Resolved
+                        val fdVal = (fdRes?.value as? ControlValue.FloatValue)?.value ?: 0f
+                        Text(
+                            text = formatDioptersAsMeters(fdVal),
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
 
             // Top bar: exposure readout chip + info/controls icons
             Row(
@@ -253,7 +292,8 @@ fun ViewfinderScreen() {
                             scope.launch {
                                 prefs.setOverride(id, value)
                             }
-                        }
+                        },
+                        onFocusTouching = { isFocusTouching = it }
                     )
                 }
             }

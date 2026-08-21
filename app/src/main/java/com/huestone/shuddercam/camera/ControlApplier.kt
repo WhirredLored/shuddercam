@@ -128,6 +128,53 @@ object ControlApplier {
             }
         }
 
+        // ── White Balance family (C08) ──
+
+        val awbRes = resolved[ControlId.AWB_MODE]
+        if (awbRes is EffectiveSettings.Resolution.Resolved) {
+            val awbMode = (awbRes.value as? ControlValue.IntValue)?.value
+            if (awbMode != null) {
+                builder.setCaptureRequestOption(CaptureRequest.CONTROL_AWB_MODE, awbMode)
+                applied = true
+                if (awbRes.wasClamped) Log.w(TAG, "AWB_MODE clamped to $awbMode")
+            }
+        }
+
+        val isManualWb = (awbRes as? EffectiveSettings.Resolution.Resolved)
+            ?.let { (it.value as? ControlValue.IntValue)?.value == 0 }
+            ?: false
+
+        if (isManualWb) {
+            // Disable AWB and apply color gains from Kelvin slider
+            builder.setCaptureRequestOption(
+                CaptureRequest.COLOR_CORRECTION_MODE,
+                android.hardware.camera2.CameraMetadata.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX
+            )
+            val kelvinRes = resolved[ControlId.COLOR_TEMP_K]
+            if (kelvinRes is EffectiveSettings.Resolution.Resolved) {
+                val kelvin = (kelvinRes.value as? ControlValue.IntValue)?.value ?: 5500
+                val gains = com.huestone.shuddercam.controls.ColorTemperature.kelvinToRggbGains(kelvin)
+                val rggbVector = android.hardware.camera2.params.RggbChannelVector(
+                    gains.red,
+                    gains.greenEven,
+                    gains.greenOdd,
+                    gains.blue
+                )
+                builder.setCaptureRequestOption(CaptureRequest.COLOR_CORRECTION_GAINS, rggbVector)
+                applied = true
+            }
+        } else {
+            // AWB_LOCK — only when AWB is active
+            val awbLockRes = resolved[ControlId.AWB_LOCK]
+            if (awbLockRes is EffectiveSettings.Resolution.Resolved) {
+                val locked = (awbLockRes.value as? ControlValue.BoolValue)?.value
+                if (locked != null) {
+                    builder.setCaptureRequestOption(CaptureRequest.CONTROL_AWB_LOCK, locked)
+                    applied = true
+                }
+            }
+        }
+
         if (applied) {
             camera2Control.setCaptureRequestOptions(builder.build())
         }

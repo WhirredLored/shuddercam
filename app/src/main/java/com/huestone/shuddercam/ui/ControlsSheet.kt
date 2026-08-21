@@ -52,6 +52,7 @@ fun ControlsSheet(
     ) {
         ExposureSection(specs, resolved, onOverride)
         FocusSection(specs, resolved, onOverride, onFocusTouching)
+        WbSection(specs, resolved, onOverride)
     }
 }
 
@@ -399,5 +400,140 @@ private fun formatDioptersAsMeters(diopters: Float): String {
         meters >= 1f -> String.format("%.1fm", meters)
         meters >= 0.1f -> String.format("%.0fcm", meters * 100)
         else -> "macro"
+    }
+}
+
+@Composable
+private fun WbSection(
+    specs: Map<ControlId, ControlSpec>,
+    resolved: Map<ControlId, EffectiveSettings.Resolution>,
+    onOverride: (ControlId, ControlValue?) -> Unit
+) {
+    val awbSpec = specs[ControlId.AWB_MODE]
+    if (awbSpec == null || !awbSpec.available) return
+
+    val allowedModes = awbSpec.allowedIntValues ?: return
+    if (allowedModes.isEmpty()) return
+
+    val awbRes = resolved[ControlId.AWB_MODE] as? EffectiveSettings.Resolution.Resolved ?: return
+    val currentAwbMode = (awbRes.value as? ControlValue.IntValue)?.value ?: 1
+    val isManualWb = currentAwbMode == 0
+
+    val tempSpec = specs[ControlId.COLOR_TEMP_K]
+
+    Spacer(modifier = Modifier.height(12.dp))
+    SectionLabel("White Balance")
+
+    // AWB mode chips
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        // Auto (1)
+        if (allowedModes.contains(1)) {
+            FilterChip(
+                selected = currentAwbMode == 1,
+                onClick = { onOverride(ControlId.AWB_MODE, ControlValue.IntValue(1)) },
+                label = { Text("Auto") },
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
+                    selectedLabelColor = MaterialTheme.colorScheme.primary
+                )
+            )
+        }
+        // Daylight (5)
+        if (allowedModes.contains(5)) {
+            FilterChip(
+                selected = currentAwbMode == 5,
+                onClick = { onOverride(ControlId.AWB_MODE, ControlValue.IntValue(5)) },
+                label = { Text("Daylight") },
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
+                    selectedLabelColor = MaterialTheme.colorScheme.primary
+                )
+            )
+        }
+        // Cloudy (6)
+        if (allowedModes.contains(6)) {
+            FilterChip(
+                selected = currentAwbMode == 6,
+                onClick = { onOverride(ControlId.AWB_MODE, ControlValue.IntValue(6)) },
+                label = { Text("Cloudy") },
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
+                    selectedLabelColor = MaterialTheme.colorScheme.primary
+                )
+            )
+        }
+        // Incandescent (2)
+        if (allowedModes.contains(2)) {
+            FilterChip(
+                selected = currentAwbMode == 2,
+                onClick = { onOverride(ControlId.AWB_MODE, ControlValue.IntValue(2)) },
+                label = { Text("Tungsten") },
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
+                    selectedLabelColor = MaterialTheme.colorScheme.primary
+                )
+            )
+        }
+        // Manual (0) — only if device supports AWB_OFF and COLOR_TEMP_K
+        if (allowedModes.contains(0) && tempSpec != null && tempSpec.available) {
+            FilterChip(
+                selected = isManualWb,
+                onClick = { onOverride(ControlId.AWB_MODE, ControlValue.IntValue(0)) },
+                label = { Text("Manual") },
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
+                    selectedLabelColor = MaterialTheme.colorScheme.primary
+                )
+            )
+        }
+    }
+
+    Spacer(modifier = Modifier.height(8.dp))
+
+    if (isManualWb && tempSpec != null && tempSpec.available && tempSpec.intRange != null) {
+        val tempRes = resolved[ControlId.COLOR_TEMP_K] as? EffectiveSettings.Resolution.Resolved
+        val currentTemp = (tempRes?.value as? ControlValue.IntValue)?.value ?: 5500
+
+        ControlSlider(
+            label = "Color Temp",
+            value = currentTemp.toFloat(),
+            range = tempSpec.intRange.first.toFloat()..tempSpec.intRange.last.toFloat(),
+            displayValue = "${currentTemp}K",
+            onValueChange = { newVal ->
+                onOverride(ControlId.COLOR_TEMP_K, ControlValue.IntValue(newVal.roundToInt()))
+            }
+        )
+    } else {
+        // AWB Lock toggle (when in auto / preset AWB)
+        val lockSpec = specs[ControlId.AWB_LOCK]
+        if (lockSpec != null && lockSpec.available) {
+            val lockRes = resolved[ControlId.AWB_LOCK] as? EffectiveSettings.Resolution.Resolved
+            val locked = (lockRes?.value as? ControlValue.BoolValue)?.value ?: false
+
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "AWB Lock",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f),
+                    modifier = Modifier.weight(1f)
+                )
+                Switch(
+                    checked = locked,
+                    onCheckedChange = { newLocked ->
+                        onOverride(ControlId.AWB_LOCK, ControlValue.BoolValue(newLocked))
+                    },
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = MaterialTheme.colorScheme.primary,
+                        checkedTrackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
+                    )
+                )
+            }
+        }
     }
 }

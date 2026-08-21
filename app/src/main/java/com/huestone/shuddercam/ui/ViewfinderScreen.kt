@@ -326,6 +326,23 @@ private fun ExposureReadout(resolved: Map<ControlId, EffectiveSettings.Resolutio
         }
     }
 
+    // WB readout
+    val awbRes = resolved[ControlId.AWB_MODE] as? EffectiveSettings.Resolution.Resolved
+    val awbMode = (awbRes?.value as? ControlValue.IntValue)?.value ?: 1
+    if (awbMode == 0) {
+        val tempRes = resolved[ControlId.COLOR_TEMP_K] as? EffectiveSettings.Resolution.Resolved
+        val kelvin = (tempRes?.value as? ControlValue.IntValue)?.value ?: 5500
+        displayParts.add("${kelvin}K")
+    } else if (awbMode != 1) {
+        val modeName = when (awbMode) {
+            2 -> "Tungsten"
+            5 -> "Daylight"
+            6 -> "Cloudy"
+            else -> "WB $awbMode"
+        }
+        displayParts.add(modeName)
+    }
+
     if (displayParts.isNotEmpty()) {
         Row(
             modifier = Modifier

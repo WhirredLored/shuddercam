@@ -8,3 +8,4 @@
 | C05 | PASS | Pure-Kotlin control model with override resolution, clamping, and 12 JVM unit tests; zero Android imports in controls/ |
 | C06 | PASS* | Exposure controls: ControlApplier, ControlsSheet, DataStore Prefs, exposure readout; deferred: device verification of manual ISO/shutter changes |
 | C07 | PASS* | Focus controls: AF mode cycling, manual focus distance slider, focus loupe overlay; deferred: device verification of focus racking |
+| C08 | PASS* | White balance family with manual Kelvin control, RGGB gains conversion, JVM unit tests; deferred: device verification of warming/cooling |

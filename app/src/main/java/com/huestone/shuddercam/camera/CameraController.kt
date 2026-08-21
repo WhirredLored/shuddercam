@@ -108,6 +108,14 @@ class CameraController(private val context: Context) {
         preview = null
     }
 
+    fun setZoomRatio(ratio: Float) {
+        cameraControl?.setZoomRatio(ratio)
+    }
+
+    fun enableTorch(enabled: Boolean) {
+        cameraControl?.enableTorch(enabled)
+    }
+
     /**
      * Tap-to-focus: creates a metering point from the given coordinates
      * and starts a focus/metering action.

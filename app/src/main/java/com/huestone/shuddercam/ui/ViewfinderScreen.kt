@@ -70,6 +70,8 @@ import com.huestone.shuddercam.controls.ControlId
 import com.huestone.shuddercam.controls.ControlSpec
 import com.huestone.shuddercam.controls.ControlValue
 import com.huestone.shuddercam.controls.EffectiveSettings
+import com.huestone.shuddercam.controls.Preset
+import com.huestone.shuddercam.controls.PresetCodec
 import com.huestone.shuddercam.controls.Presets
 import com.huestone.shuddercam.data.Prefs
 import kotlinx.coroutines.Dispatchers
@@ -103,7 +105,12 @@ fun ViewfinderScreen() {
     val prefs = remember { Prefs(context) }
     val overrides by prefs.overrides.collectAsState(initial = emptyMap())
     val activePresetId by prefs.activePresetId.collectAsState(initial = Presets.DEVICE_AUTO.id)
-    val activePreset = remember(activePresetId) { Presets.byId(activePresetId) }
+    val userPresets by prefs.userPresets.collectAsState(initial = emptyList())
+    // Deleting the active user preset leaves an id nobody claims, which falls back
+    // to Device Auto with every override still in place.
+    val activePreset = remember(activePresetId, userPresets) {
+        Presets.byId(activePresetId, userPresets)
+    }
 
     // Check if in Manual Focus mode (AF_MODE == 0)
     val afRes = resolved[ControlId.AF_MODE] as? EffectiveSettings.Resolution.Resolved
@@ -428,6 +435,7 @@ fun ViewfinderScreen() {
                         resolved = resolved,
                         overriddenIds = overrides.filterValues { it != null }.keys,
                         activePreset = activePreset,
+                        userPresets = userPresets,
                         isAbHolding = isAbHolding,
                         onOverride = { id, value ->
                             scope.launch {
@@ -437,6 +445,23 @@ fun ViewfinderScreen() {
                         // Overrides survive a preset switch — they shadow it.
                         onSelectPreset = { preset ->
                             scope.launch { prefs.setActivePresetId(preset.id) }
+                        },
+                        // Snapshot the current effective settings: preset and
+                        // overrides collapsed into one flat set of values.
+                        onSaveCurrentAsPreset = { name ->
+                            scope.launch {
+                                val saved = snapshotAsPreset(name, resolved)
+                                prefs.saveUserPreset(saved)
+                                prefs.setActivePresetId(saved.id)
+                            }
+                        },
+                        onRenamePreset = { preset, newName ->
+                            scope.launch {
+                                prefs.saveUserPreset(preset.copy(displayName = newName))
+                            }
+                        },
+                        onDeletePreset = { preset ->
+                            scope.launch { prefs.deleteUserPreset(preset.id) }
                         },
                         onResetAll = { scope.launch { prefs.clearAllOverrides() } },
                         onAbHoldChange = { isAbHolding = it },
@@ -457,6 +482,21 @@ fun ViewfinderScreen() {
         }
     }
 }
+
+/**
+ * Freezes the current effective settings into a named user preset. Saved values
+ * are re-clamped against the device caps whenever they are loaded, so a preset
+ * captured on a FULL device degrades gracefully on a narrower one.
+ */
+private fun snapshotAsPreset(
+    name: String,
+    resolved: Map<ControlId, EffectiveSettings.Resolution>
+): Preset = Preset(
+    id = PresetCodec.idForName(name),
+    displayName = PresetCodec.sanitizeName(name),
+    description = "Saved from the current settings",
+    values = EffectiveSettings.snapshot(resolved)
+)
 
 /**
  * Bottom capture bar: last-shot thumbnail on the left, shutter in the centre.

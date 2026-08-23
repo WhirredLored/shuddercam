@@ -63,6 +63,17 @@ object EffectiveSettings {
     }
 
     /**
+     * Collapses a resolution map into flat values — the preset layer and the
+     * override layer merged into what the camera is actually doing right now.
+     * Controls this device does not support resolve to Absent and drop out, so
+     * a snapshot only ever contains values that meant something when taken.
+     */
+    fun snapshot(resolved: Map<ControlId, Resolution>): Map<ControlId, ControlValue> =
+        resolved.mapNotNull { (id, resolution) ->
+            (resolution as? Resolution.Resolved)?.let { id to it.value }
+        }.toMap()
+
+    /**
      * Default "device auto" value for a control when neither override nor preset
      * provides a value. These are the safe defaults that let the camera auto-adjust.
      */

@@ -9,9 +9,13 @@ import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.huestone.shuddercam.controls.ControlId
 import com.huestone.shuddercam.controls.ControlValue
+import com.huestone.shuddercam.controls.Preset
+import com.huestone.shuddercam.controls.PresetCodec
+import com.huestone.shuddercam.controls.Presets
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
@@ -25,6 +29,7 @@ class Prefs(private val context: Context) {
 
     companion object {
         private val KEY_ACTIVE_PRESET = stringPreferencesKey("active_preset_id")
+        private val KEY_USER_PRESETS = stringSetPreferencesKey("user_presets")
 
         // Override keys - typed per control
         private val KEY_AE_MODE = intPreferencesKey("override_ae_mode")
@@ -77,6 +82,41 @@ class Prefs(private val context: Context) {
         prefs[KEY_GRID_OVERLAY]?.let { map[ControlId.GRID_OVERLAY] = ControlValue.BoolValue(it) }
 
         map
+    }
+
+    /**
+     * User-saved presets, a layer entirely separate from the built-in constants.
+     * A record this build cannot parse is dropped rather than crashing the flow.
+     * Ordered by name so the selector stays stable across restarts.
+     */
+    val userPresets: Flow<List<Preset>> = context.dataStore.data.map { prefs ->
+        (prefs[KEY_USER_PRESETS] ?: emptySet())
+            .mapNotNull { PresetCodec.decode(it) }
+            .sortedBy { it.displayName.lowercase() }
+    }
+
+    /**
+     * Saves (or replaces) a user preset. Built-in ids are refused outright so a
+     * user preset can never shadow a code constant.
+     */
+    suspend fun saveUserPreset(preset: Preset) {
+        if (Presets.isBuiltIn(preset.id)) return
+        context.dataStore.edit { prefs ->
+            val existing = prefs[KEY_USER_PRESETS] ?: emptySet()
+            val withoutSameId = existing.filter { record ->
+                PresetCodec.decode(record)?.id != preset.id
+            }
+            prefs[KEY_USER_PRESETS] = (withoutSameId + PresetCodec.encode(preset)).toSet()
+        }
+    }
+
+    suspend fun deleteUserPreset(id: String) {
+        context.dataStore.edit { prefs ->
+            val existing = prefs[KEY_USER_PRESETS] ?: emptySet()
+            prefs[KEY_USER_PRESETS] = existing
+                .filter { record -> PresetCodec.decode(record)?.id != id }
+                .toSet()
+        }
     }
 
     suspend fun setActivePresetId(id: String) {

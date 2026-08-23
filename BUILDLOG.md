@@ -15,6 +15,8 @@
 
 | C12 | PASS* | Five immutable built-in presets (Device Auto, Night Hand-held, Long Exposure, Daylight Crisp, UV Hunt) with descriptions, selector chips, persisted active id, 15 JVM tests across FULL and LIMITED caps; deferred: device verification that each preset visibly changes the preview per its description |
 
+| C13 | PASS* | User presets as a separate DataStore layer: save-current snapshot, rename/delete via long-press menu, Slate chips, clamp-on-load, 15 JVM tests; deferred: device verification of save/rename/delete and survival across restart |
+
 ## Milestone gates
 
 **M2 — Manual Control Engine [C05–C11] → tagged v0.2.0 (2026-08-23). GATE DEFERRED.**
@@ -27,3 +29,13 @@ The exit gate needs physical hardware and cannot be run here. A human must check
 3. Photo capture works with manual settings applied: a shot at an extreme setting (2s shutter,
    ISO 100) matches the preview's look, lands in Pictures/ShudderCam with the SC_yyyyMMdd_HHmmss
    name, and opens right-side-up from the corner thumbnail.
+
+**M3 — Presets [C12–C13] → tagged v0.3.0 (2026-08-23). GATE DEFERRED.**
+The exit gate is behavioural and needs a device. A human must check, after an app restart:
+1. Preset switch — each built-in visibly changes the preview per its description, and any
+   overrides in place survive the switch with their reset glyphs still accurate.
+2. Per-control reset clears exactly one control; reset-all clears every override after the
+   confirmation dialog and returns the camera to the active preset.
+3. Save-as-custom names a preset from the current effective settings, it reappears after a
+   restart along with the active selection, rename and delete work from the long-press menu,
+   and deleting the active user preset drops back to Device Auto with overrides preserved.

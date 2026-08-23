@@ -79,8 +79,15 @@ object Presets {
     val ALL = listOf(DEVICE_AUTO, NIGHT_HANDHELD, LONG_EXPOSURE, DAYLIGHT_CRISP, UV_HUNT)
 
     /**
-     * Resolves a persisted preset id, falling back to DEVICE_AUTO for an id this
-     * build no longer ships.
+     * Resolves a persisted preset id against the built-ins plus any user-saved
+     * presets, falling back to DEVICE_AUTO for an id that no longer exists —
+     * which is exactly what happens when the active user preset is deleted.
      */
-    fun byId(id: String): Preset = ALL.firstOrNull { it.id == id } ?: DEVICE_AUTO
+    fun byId(id: String, userPresets: List<Preset> = emptyList()): Preset =
+        ALL.firstOrNull { it.id == id }
+            ?: userPresets.firstOrNull { it.id == id }
+            ?: DEVICE_AUTO
+
+    /** Built-ins are code constants; only user presets can be renamed or deleted. */
+    fun isBuiltIn(id: String): Boolean = ALL.any { it.id == id }
 }

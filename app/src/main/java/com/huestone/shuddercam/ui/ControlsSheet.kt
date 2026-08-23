@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -18,11 +19,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
@@ -40,11 +44,13 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.huestone.shuddercam.brand.Brand
 import com.huestone.shuddercam.controls.ControlId
 import com.huestone.shuddercam.controls.ControlSpec
 import com.huestone.shuddercam.controls.ControlValue
 import com.huestone.shuddercam.controls.EffectiveSettings
 import com.huestone.shuddercam.controls.Preset
+import com.huestone.shuddercam.controls.PresetCodec
 import com.huestone.shuddercam.controls.Presets
 import kotlin.math.ln
 import kotlin.math.roundToInt
@@ -64,9 +70,13 @@ fun ControlsSheet(
     resolved: Map<ControlId, EffectiveSettings.Resolution>,
     overriddenIds: Set<ControlId>,
     activePreset: Preset,
+    userPresets: List<Preset>,
     isAbHolding: Boolean,
     onOverride: (ControlId, ControlValue?) -> Unit,
     onSelectPreset: (Preset) -> Unit,
+    onSaveCurrentAsPreset: (String) -> Unit,
+    onRenamePreset: (Preset, String) -> Unit,
+    onDeletePreset: (Preset) -> Unit,
     onResetAll: () -> Unit,
     onAbHoldChange: (Boolean) -> Unit,
     onFocusTouching: (Boolean) -> Unit = {}
@@ -88,9 +98,13 @@ fun ControlsSheet(
     ) {
         SheetHeader(
             activePreset = activePreset,
+            userPresets = userPresets,
             isAbHolding = isAbHolding,
             hasOverrides = overriddenIds.isNotEmpty(),
             onSelectPreset = onSelectPreset,
+            onSaveCurrentAsPreset = onSaveCurrentAsPreset,
+            onRenamePreset = onRenamePreset,
+            onDeletePreset = onDeletePreset,
             onResetAll = onResetAll,
             onAbHoldChange = onAbHoldChange
         )
@@ -145,13 +159,22 @@ private enum class SheetSection(val label: String, val controlIds: List<ControlI
 @Composable
 private fun SheetHeader(
     activePreset: Preset,
+    userPresets: List<Preset>,
     isAbHolding: Boolean,
     hasOverrides: Boolean,
     onSelectPreset: (Preset) -> Unit,
+    onSaveCurrentAsPreset: (String) -> Unit,
+    onRenamePreset: (Preset, String) -> Unit,
+    onDeletePreset: (Preset) -> Unit,
     onResetAll: () -> Unit,
     onAbHoldChange: (Boolean) -> Unit
 ) {
     var confirmVisible by remember { mutableStateOf(false) }
+    var saveVisible by remember { mutableStateOf(false) }
+    var renameTarget by remember { mutableStateOf<Preset?>(null) }
+    var menuPresetId by remember { mutableStateOf<String?>(null) }
+
+    val takenNames = (Presets.ALL + userPresets).map { it.displayName }
 
     Row(
         modifier = Modifier
@@ -166,38 +189,47 @@ private fun SheetHeader(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            // Built-ins first, then the user layer — visually distinct, never mixed.
             Presets.ALL.forEach { preset ->
-                val isActive = preset.id == activePreset.id
-                if (isActive) {
-                    // Press and hold the active preset to audition it alone —
-                    // overrides are suspended while the finger is down, never cleared.
-                    FilterChip(
-                        selected = !isAbHolding,
-                        onClick = {},
-                        label = {
-                            Text(
-                                if (isAbHolding) "${preset.displayName} (stock)"
-                                else preset.displayName
-                            )
-                        },
-                        modifier = Modifier.pointerInput(preset.id) {
-                            detectTapGestures(
-                                onPress = {
-                                    onAbHoldChange(true)
-                                    tryAwaitRelease()
-                                    onAbHoldChange(false)
-                                }
-                            )
-                        },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
-                            selectedLabelColor = MaterialTheme.colorScheme.primary
-                        )
-                    )
-                } else {
-                    ModeChip(preset.displayName, false) { onSelectPreset(preset) }
-                }
+                PresetChip(
+                    preset = preset,
+                    isActive = preset.id == activePreset.id,
+                    isUserPreset = false,
+                    isAbHolding = isAbHolding,
+                    menuOpen = false,
+                    onSelect = { onSelectPreset(preset) },
+                    onAbHoldChange = onAbHoldChange,
+                    onOpenMenu = {},
+                    onDismissMenu = {},
+                    onRename = {},
+                    onDelete = {}
+                )
             }
+            userPresets.forEach { preset ->
+                PresetChip(
+                    preset = preset,
+                    isActive = preset.id == activePreset.id,
+                    isUserPreset = true,
+                    isAbHolding = isAbHolding,
+                    menuOpen = menuPresetId == preset.id,
+                    onSelect = { onSelectPreset(preset) },
+                    onAbHoldChange = onAbHoldChange,
+                    onOpenMenu = { menuPresetId = preset.id },
+                    onDismissMenu = { menuPresetId = null },
+                    onRename = {
+                        menuPresetId = null
+                        renameTarget = preset
+                    },
+                    onDelete = {
+                        menuPresetId = null
+                        onDeletePreset(preset)
+                    }
+                )
+            }
+        }
+
+        TextButton(onClick = { saveVisible = true }) {
+            Text("Save")
         }
 
         if (hasOverrides) {
@@ -205,6 +237,34 @@ private fun SheetHeader(
                 Text("Reset all")
             }
         }
+    }
+
+    if (saveVisible) {
+        PresetNameDialog(
+            title = "Save current as preset",
+            initialName = "",
+            takenNames = takenNames,
+            confirmLabel = "Save",
+            onDismiss = { saveVisible = false },
+            onConfirm = { name ->
+                saveVisible = false
+                onSaveCurrentAsPreset(name)
+            }
+        )
+    }
+
+    renameTarget?.let { target ->
+        PresetNameDialog(
+            title = "Rename preset",
+            initialName = target.displayName,
+            takenNames = takenNames.filterNot { it == target.displayName },
+            confirmLabel = "Rename",
+            onDismiss = { renameTarget = null },
+            onConfirm = { name ->
+                renameTarget = null
+                onRenamePreset(target, name)
+            }
+        )
     }
 
     // Switching presets never clears overrides — they shadow whatever is beneath.
@@ -240,6 +300,124 @@ private fun SheetHeader(
             }
         )
     }
+}
+
+/**
+ * A preset chip. The active chip auditions its preset while held (overrides
+ * suspended, never cleared); a user chip additionally opens rename/delete on a
+ * long press, which ends the audition first so the two never overlap.
+ */
+@Composable
+private fun PresetChip(
+    preset: Preset,
+    isActive: Boolean,
+    isUserPreset: Boolean,
+    isAbHolding: Boolean,
+    menuOpen: Boolean,
+    onSelect: () -> Unit,
+    onAbHoldChange: (Boolean) -> Unit,
+    onOpenMenu: () -> Unit,
+    onDismissMenu: () -> Unit,
+    onRename: () -> Unit,
+    onDelete: () -> Unit
+) {
+    Box {
+        FilterChip(
+            selected = isActive && !isAbHolding,
+            onClick = {},
+            label = {
+                Text(
+                    if (isActive && isAbHolding) "${preset.displayName} (stock)"
+                    else preset.displayName
+                )
+            },
+            modifier = Modifier.pointerInput(preset.id, isActive, isUserPreset) {
+                detectTapGestures(
+                    onPress = {
+                        if (isActive) {
+                            onAbHoldChange(true)
+                            tryAwaitRelease()
+                            onAbHoldChange(false)
+                        }
+                    },
+                    onTap = { if (!isActive) onSelect() },
+                    onLongPress = {
+                        if (isUserPreset) {
+                            onAbHoldChange(false)
+                            onOpenMenu()
+                        }
+                    }
+                )
+            },
+            colors = if (isUserPreset) {
+                // Slate marks the mutable user layer; Bone/red stays for built-ins.
+                FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = Brand.Slate.copy(alpha = 0.35f),
+                    selectedLabelColor = MaterialTheme.colorScheme.onSurface
+                )
+            } else {
+                FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
+                    selectedLabelColor = MaterialTheme.colorScheme.primary
+                )
+            }
+        )
+
+        DropdownMenu(expanded = menuOpen, onDismissRequest = onDismissMenu) {
+            DropdownMenuItem(text = { Text("Rename") }, onClick = onRename)
+            DropdownMenuItem(text = { Text("Delete") }, onClick = onDelete)
+        }
+    }
+}
+
+/**
+ * Names a preset, refusing duplicates without scolding.
+ */
+@Composable
+private fun PresetNameDialog(
+    title: String,
+    initialName: String,
+    takenNames: List<String>,
+    confirmLabel: String,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit
+) {
+    var name by remember { mutableStateOf(initialName) }
+    val trimmed = name.trim()
+    val isDuplicate = takenNames.any { it.equals(trimmed, ignoreCase = true) }
+    val isValid = trimmed.isNotEmpty() && !isDuplicate
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it.take(PresetCodec.MAX_NAME_LENGTH) },
+                    singleLine = true,
+                    label = { Text("Name") },
+                    isError = isDuplicate
+                )
+                if (isDuplicate) {
+                    Text(
+                        text = "That name is already taken — try another.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(enabled = isValid, onClick = { onConfirm(trimmed) }) {
+                Text(confirmLabel)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        }
+    )
 }
 
 @Composable

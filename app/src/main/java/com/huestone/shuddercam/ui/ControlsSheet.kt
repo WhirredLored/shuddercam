@@ -44,6 +44,8 @@ import com.huestone.shuddercam.controls.ControlId
 import com.huestone.shuddercam.controls.ControlSpec
 import com.huestone.shuddercam.controls.ControlValue
 import com.huestone.shuddercam.controls.EffectiveSettings
+import com.huestone.shuddercam.controls.Preset
+import com.huestone.shuddercam.controls.Presets
 import kotlin.math.ln
 import kotlin.math.roundToInt
 import kotlin.math.roundToLong
@@ -61,9 +63,10 @@ fun ControlsSheet(
     specs: Map<ControlId, ControlSpec>,
     resolved: Map<ControlId, EffectiveSettings.Resolution>,
     overriddenIds: Set<ControlId>,
-    presetName: String,
+    activePreset: Preset,
     isAbHolding: Boolean,
     onOverride: (ControlId, ControlValue?) -> Unit,
+    onSelectPreset: (Preset) -> Unit,
     onResetAll: () -> Unit,
     onAbHoldChange: (Boolean) -> Unit,
     onFocusTouching: (Boolean) -> Unit = {}
@@ -84,9 +87,10 @@ fun ControlsSheet(
             .padding(horizontal = 16.dp, vertical = 12.dp)
     ) {
         SheetHeader(
-            presetName = presetName,
+            activePreset = activePreset,
             isAbHolding = isAbHolding,
             hasOverrides = overriddenIds.isNotEmpty(),
+            onSelectPreset = onSelectPreset,
             onResetAll = onResetAll,
             onAbHoldChange = onAbHoldChange
         )
@@ -140,9 +144,10 @@ private enum class SheetSection(val label: String, val controlIds: List<ControlI
 
 @Composable
 private fun SheetHeader(
-    presetName: String,
+    activePreset: Preset,
     isAbHolding: Boolean,
     hasOverrides: Boolean,
+    onSelectPreset: (Preset) -> Unit,
     onResetAll: () -> Unit,
     onAbHoldChange: (Boolean) -> Unit
 ) {
@@ -154,28 +159,46 @@ private fun SheetHeader(
             .heightIn(min = 48.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Press and hold to audition the preset alone — overrides are suspended
-        // for as long as the finger is down, never cleared.
-        FilterChip(
-            selected = !isAbHolding,
-            onClick = {},
-            label = { Text(if (isAbHolding) "$presetName (stock)" else presetName) },
-            modifier = Modifier.pointerInput(Unit) {
-                detectTapGestures(
-                    onPress = {
-                        onAbHoldChange(true)
-                        tryAwaitRelease()
-                        onAbHoldChange(false)
-                    }
-                )
-            },
-            colors = FilterChipDefaults.filterChipColors(
-                selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
-                selectedLabelColor = MaterialTheme.colorScheme.primary
-            )
-        )
-
-        Spacer(modifier = Modifier.weight(1f))
+        Row(
+            modifier = Modifier
+                .weight(1f)
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Presets.ALL.forEach { preset ->
+                val isActive = preset.id == activePreset.id
+                if (isActive) {
+                    // Press and hold the active preset to audition it alone —
+                    // overrides are suspended while the finger is down, never cleared.
+                    FilterChip(
+                        selected = !isAbHolding,
+                        onClick = {},
+                        label = {
+                            Text(
+                                if (isAbHolding) "${preset.displayName} (stock)"
+                                else preset.displayName
+                            )
+                        },
+                        modifier = Modifier.pointerInput(preset.id) {
+                            detectTapGestures(
+                                onPress = {
+                                    onAbHoldChange(true)
+                                    tryAwaitRelease()
+                                    onAbHoldChange(false)
+                                }
+                            )
+                        },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
+                            selectedLabelColor = MaterialTheme.colorScheme.primary
+                        )
+                    )
+                } else {
+                    ModeChip(preset.displayName, false) { onSelectPreset(preset) }
+                }
+            }
+        }
 
         if (hasOverrides) {
             TextButton(onClick = { confirmVisible = true }) {
@@ -184,11 +207,24 @@ private fun SheetHeader(
         }
     }
 
+    // Switching presets never clears overrides — they shadow whatever is beneath.
+    Text(
+        text = activePreset.description,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+        modifier = Modifier.padding(bottom = 4.dp)
+    )
+
     if (confirmVisible) {
         AlertDialog(
             onDismissRequest = { confirmVisible = false },
             title = { Text("Reset all controls?") },
-            text = { Text("Every override is cleared and the camera returns to $presetName.") },
+            text = {
+                Text(
+                    "Every override is cleared and the camera returns to " +
+                        "${activePreset.displayName}."
+                )
+            },
             confirmButton = {
                 TextButton(onClick = {
                     confirmVisible = false

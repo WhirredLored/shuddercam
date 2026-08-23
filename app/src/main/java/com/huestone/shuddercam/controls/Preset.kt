@@ -8,6 +8,7 @@ package com.huestone.shuddercam.controls
 data class Preset(
     val id: String,
     val displayName: String,
+    val description: String,
     val values: Map<ControlId, ControlValue>
 ) {
     /**

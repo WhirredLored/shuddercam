@@ -13,6 +13,8 @@
 | C10 | PASS* | Still capture to Pictures/ShudderCam via MediaStore, flash-at-capture, blink + shutter sound + thumbnail handoff; JPEG-only (no DNG on CameraX 1.4.1); deferred: device verification that manual settings reach the capture request, EXIF orientation, and filename/timestamp |
 | C11 | PASS* | Tabbed control panel (Exposure/Focus/WB/Motion/Capture), per-control reset glyphs, reset-all with confirmation, press-and-hold A/B preset audition; deferred: device verification of glyph behaviour and the A/B hold rendering |
 
+| C12 | PASS* | Five immutable built-in presets (Device Auto, Night Hand-held, Long Exposure, Daylight Crisp, UV Hunt) with descriptions, selector chips, persisted active id, 15 JVM tests across FULL and LIMITED caps; deferred: device verification that each preset visibly changes the preview per its description |
+
 ## Milestone gates
 
 **M2 — Manual Control Engine [C05–C11] → tagged v0.2.0 (2026-08-23). GATE DEFERRED.**

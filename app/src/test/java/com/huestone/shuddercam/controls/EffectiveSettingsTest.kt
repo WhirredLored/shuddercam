@@ -108,6 +108,7 @@ class EffectiveSettingsTest {
         val preset = Preset(
             id = "night",
             displayName = "Night",
+            description = "Test preset",
             values = mapOf(
                 ControlId.ISO to ControlValue.IntValue(1600),
                 ControlId.SHUTTER_NS to ControlValue.LongValue(500_000_000L)
@@ -128,11 +129,11 @@ class EffectiveSettingsTest {
     @Test
     fun `preset switch with overrides held - overrides still win`() {
         val preset1 = Preset(
-            id = "p1", displayName = "P1",
+            id = "p1", displayName = "P1", description = "Test preset one",
             values = mapOf(ControlId.ISO to ControlValue.IntValue(400))
         )
         val preset2 = Preset(
-            id = "p2", displayName = "P2",
+            id = "p2", displayName = "P2", description = "Test preset two",
             values = mapOf(ControlId.ISO to ControlValue.IntValue(3200))
         )
         val overrides = mapOf<ControlId, ControlValue?>(

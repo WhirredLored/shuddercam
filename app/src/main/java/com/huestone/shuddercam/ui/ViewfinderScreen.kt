@@ -102,6 +102,8 @@ fun ViewfinderScreen() {
 
     val prefs = remember { Prefs(context) }
     val overrides by prefs.overrides.collectAsState(initial = emptyMap())
+    val activePresetId by prefs.activePresetId.collectAsState(initial = Presets.DEVICE_AUTO.id)
+    val activePreset = remember(activePresetId) { Presets.byId(activePresetId) }
 
     // Check if in Manual Focus mode (AF_MODE == 0)
     val afRes = resolved[ControlId.AF_MODE] as? EffectiveSettings.Resolution.Resolved
@@ -212,11 +214,11 @@ fun ViewfinderScreen() {
         // Resolve and apply whenever overrides, specs, or the A/B hold change.
         // Holding suspends overrides without clearing them, so releasing restores
         // the tweaked look immediately.
-        LaunchedEffect(overrides, specs, isAbHolding) {
+        LaunchedEffect(overrides, specs, isAbHolding, activePreset) {
             if (specs.isNotEmpty()) {
                 val newResolved = EffectiveSettings.resolveAll(
                     specs = specs,
-                    activePreset = Presets.DEVICE_AUTO,
+                    activePreset = activePreset,
                     overrides = if (isAbHolding) emptyMap() else overrides
                 )
                 resolved = newResolved
@@ -425,12 +427,16 @@ fun ViewfinderScreen() {
                         specs = specs,
                         resolved = resolved,
                         overriddenIds = overrides.filterValues { it != null }.keys,
-                        presetName = Presets.DEVICE_AUTO.displayName,
+                        activePreset = activePreset,
                         isAbHolding = isAbHolding,
                         onOverride = { id, value ->
                             scope.launch {
                                 prefs.setOverride(id, value)
                             }
+                        },
+                        // Overrides survive a preset switch — they shadow it.
+                        onSelectPreset = { preset ->
+                            scope.launch { prefs.setActivePresetId(preset.id) }
                         },
                         onResetAll = { scope.launch { prefs.clearAllOverrides() } },
                         onAbHoldChange = { isAbHolding = it },

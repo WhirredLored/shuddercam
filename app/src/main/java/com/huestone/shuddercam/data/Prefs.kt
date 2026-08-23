@@ -31,6 +31,13 @@ class Prefs(private val context: Context) {
         private val KEY_ACTIVE_PRESET = stringPreferencesKey("active_preset_id")
         private val KEY_USER_PRESETS = stringSetPreferencesKey("user_presets")
         private val KEY_EDGELESS = booleanPreferencesKey("edgeless")
+        private val KEY_TRUESIGHT = booleanPreferencesKey("truesight")
+        private val KEY_BRIGHTNESS_ASSIST = booleanPreferencesKey("brightness_assist")
+
+        // Portrait and landscape occlude different slices of the world, so each
+        // orientation carries its own empirical factor.
+        private val KEY_CALIBRATION_PORTRAIT = floatPreferencesKey("calibration_portrait")
+        private val KEY_CALIBRATION_LANDSCAPE = floatPreferencesKey("calibration_landscape")
 
         // Override keys - typed per control
         private val KEY_AE_MODE = intPreferencesKey("override_ae_mode")
@@ -93,6 +100,47 @@ class Prefs(private val context: Context) {
     suspend fun setEdgeless(enabled: Boolean) {
         context.dataStore.edit { prefs ->
             prefs[KEY_EDGELESS] = enabled
+        }
+    }
+
+    /** TrueSight implies edgeless — it is edgeless plus a scale calibration. */
+    val trueSight: Flow<Boolean> = context.dataStore.data.map { prefs ->
+        prefs[KEY_TRUESIGHT] ?: false
+    }
+
+    suspend fun setTrueSight(enabled: Boolean) {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_TRUESIGHT] = enabled
+        }
+    }
+
+    /** Off by default: it only ever raises brightness on this app's own window. */
+    val brightnessAssist: Flow<Boolean> = context.dataStore.data.map { prefs ->
+        prefs[KEY_BRIGHTNESS_ASSIST] ?: false
+    }
+
+    suspend fun setBrightnessAssist(enabled: Boolean) {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_BRIGHTNESS_ASSIST] = enabled
+        }
+    }
+
+    /**
+     * Calibration factor per orientation. Null means this orientation has never
+     * been calibrated, which is what triggers the first-run flow.
+     */
+    val calibrationPortrait: Flow<Float?> = context.dataStore.data.map { prefs ->
+        prefs[KEY_CALIBRATION_PORTRAIT]
+    }
+
+    val calibrationLandscape: Flow<Float?> = context.dataStore.data.map { prefs ->
+        prefs[KEY_CALIBRATION_LANDSCAPE]
+    }
+
+    suspend fun setCalibration(factor: Float, isPortrait: Boolean) {
+        context.dataStore.edit { prefs ->
+            val key = if (isPortrait) KEY_CALIBRATION_PORTRAIT else KEY_CALIBRATION_LANDSCAPE
+            prefs[key] = factor
         }
     }
 

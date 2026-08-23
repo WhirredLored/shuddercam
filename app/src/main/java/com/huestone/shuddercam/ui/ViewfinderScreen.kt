@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.content.res.Configuration
 import android.graphics.BitmapFactory
 import android.media.AudioManager
 import android.media.MediaActionSound
@@ -36,7 +37,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -83,6 +87,7 @@ import com.huestone.shuddercam.controls.PresetCodec
 import com.huestone.shuddercam.controls.Presets
 import com.huestone.shuddercam.data.Prefs
 import com.huestone.shuddercam.util.EdgelessController
+import com.huestone.shuddercam.util.ScreenBrightness
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -104,6 +109,9 @@ fun ViewfinderScreen() {
     var isAbHolding by remember { mutableStateOf(false) }
     var chromeRevealToken by remember { mutableStateOf(0) }
     var chromeVisible by remember { mutableStateOf(false) }
+    var showSettings by remember { mutableStateOf(false) }
+    var isCalibrating by remember { mutableStateOf(false) }
+    var liveCalibration by remember { mutableStateOf<Float?>(null) }
     var isCapturing by remember { mutableStateOf(false) }
     var isBlinking by remember { mutableStateOf(false) }
     var lastShotUri by remember { mutableStateOf<Uri?>(null) }
@@ -115,7 +123,14 @@ fun ViewfinderScreen() {
 
     val prefs = remember { Prefs(context) }
     val overrides by prefs.overrides.collectAsState(initial = emptyMap())
-    val isEdgeless by prefs.edgeless.collectAsState(initial = false)
+    val edgelessPref by prefs.edgeless.collectAsState(initial = false)
+    val isTrueSight by prefs.trueSight.collectAsState(initial = false)
+    val brightnessAssist by prefs.brightnessAssist.collectAsState(initial = false)
+    val calibrationPortrait by prefs.calibrationPortrait.collectAsState(initial = null)
+    val calibrationLandscape by prefs.calibrationLandscape.collectAsState(initial = null)
+
+    // TrueSight IS edgeless plus a scale calibration, so it implies the mode.
+    val isEdgeless = edgelessPref || isTrueSight
     val activePresetId by prefs.activePresetId.collectAsState(initial = Presets.DEVICE_AUTO.id)
     val userPresets by prefs.userPresets.collectAsState(initial = emptyList())
     // Deleting the active user preset leaves an id nobody claims, which falls back
@@ -123,6 +138,21 @@ fun ViewfinderScreen() {
     val activePreset = remember(activePresetId, userPresets) {
         Presets.byId(activePresetId, userPresets)
     }
+
+    val configuration = LocalConfiguration.current
+    val isPortrait = configuration.orientation == Configuration.ORIENTATION_PORTRAIT
+    val storedCalibration = if (isPortrait) calibrationPortrait else calibrationLandscape
+
+    // What the resolution layer composes onto the user's own zoom.
+    val zoomCalibration = when {
+        !isTrueSight -> EffectiveSettings.NO_CALIBRATION
+        isCalibrating -> liveCalibration ?: storedCalibration ?: DEFAULT_CALIBRATION
+        else -> storedCalibration ?: EffectiveSettings.NO_CALIBRATION
+    }
+
+    // The zoom the user dialled in, calibration excluded — what pinch and the
+    // slider read and write, so editing never compounds calibration into itself.
+    val userZoom = EffectiveSettings.userZoom(overrides, activePreset)
 
     // Check if in Manual Focus mode (AF_MODE == 0)
     val afRes = resolved[ControlId.AF_MODE] as? EffectiveSettings.Resolution.Resolved
@@ -151,6 +181,24 @@ fun ViewfinderScreen() {
     LaunchedEffect(isEdgeless, view) {
         (context as? Activity)?.let { activity ->
             EdgelessController.apply(activity, isEdgeless, view)
+        }
+    }
+
+    // Brightness assist rides on TrueSight and hands brightness back on exit.
+    DisposableEffect(isTrueSight, brightnessAssist) {
+        val activity = context as? Activity
+        if (activity != null && isTrueSight && brightnessAssist) {
+            ScreenBrightness.boost(activity)
+        }
+        onDispose { activity?.let { ScreenBrightness.restore(it) } }
+    }
+
+    // First run in this orientation opens calibration; an already-calibrated
+    // orientation goes straight to the see-through view.
+    LaunchedEffect(isTrueSight, isPortrait, storedCalibration) {
+        if (isTrueSight && storedCalibration == null && !isCalibrating) {
+            liveCalibration = DEFAULT_CALIBRATION
+            isCalibrating = true
         }
     }
 
@@ -188,6 +236,25 @@ fun ViewfinderScreen() {
         DiagnosticsScreen(
             allCaps = allCaps,
             onBack = { showDiagnostics = false }
+        )
+        return
+    }
+
+    if (showSettings) {
+        SettingsScreen(
+            calibrationPortrait = calibrationPortrait,
+            calibrationLandscape = calibrationLandscape,
+            brightnessAssist = brightnessAssist,
+            onRecalibrate = {
+                showSettings = false
+                liveCalibration = storedCalibration ?: DEFAULT_CALIBRATION
+                isCalibrating = true
+                scope.launch { prefs.setTrueSight(true) }
+            },
+            onBrightnessAssistChange = { enabled ->
+                scope.launch { prefs.setBrightnessAssist(enabled) }
+            },
+            onBack = { showSettings = false }
         )
         return
     }
@@ -254,12 +321,13 @@ fun ViewfinderScreen() {
         // Resolve and apply whenever overrides, specs, or the A/B hold change.
         // Holding suspends overrides without clearing them, so releasing restores
         // the tweaked look immediately.
-        LaunchedEffect(overrides, specs, isAbHolding, activePreset) {
+        LaunchedEffect(overrides, specs, isAbHolding, activePreset, zoomCalibration) {
             if (specs.isNotEmpty()) {
                 val newResolved = EffectiveSettings.resolveAll(
                     specs = specs,
                     activePreset = activePreset,
-                    overrides = if (isAbHolding) emptyMap() else overrides
+                    overrides = if (isAbHolding) emptyMap() else overrides,
+                    zoomCalibration = zoomCalibration
                 )
                 resolved = newResolved
                 cameraController.applySettings(newResolved)
@@ -281,7 +349,6 @@ fun ViewfinderScreen() {
         }
 
         // Keep EXIF orientation correct as the device rotates.
-        val configuration = LocalConfiguration.current
         LaunchedEffect(configuration) {
             previewViewRef?.display?.let { cameraController.setTargetRotation(it.rotation) }
         }
@@ -326,21 +393,20 @@ fun ViewfinderScreen() {
 
         // Gesture handlers outlive the composition that created them, so they read
         // the latest values rather than the ones captured when they were installed.
-        val currentResolved by rememberUpdatedState(resolved)
         val currentIsMf by rememberUpdatedState(isMf)
+        val currentUserZoom by rememberUpdatedState(userZoom)
 
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .pointerInput(zoomEnabled, zoomRange) {
-                    if (!zoomEnabled) return@pointerInput
+                .pointerInput(zoomEnabled, zoomRange, isCalibrating) {
+                    // Calibration owns the drag while it is up.
+                    if (!zoomEnabled || isCalibrating) return@pointerInput
                     detectTransformGestures { _, _, zoomChange, _ ->
                         if (zoomChange != 1.0f) {
-                            val zoomRes = currentResolved[ControlId.ZOOM_RATIO]
-                                as? EffectiveSettings.Resolution.Resolved
-                            val currentZoom =
-                                (zoomRes?.value as? ControlValue.FloatValue)?.value ?: 1.0f
-                            val newZoom = (currentZoom * zoomChange).coerceIn(zoomRange)
+                            // Pinch edits the user's own zoom, which then rides on
+                            // top of any TrueSight calibration.
+                            val newZoom = (currentUserZoom * zoomChange).coerceIn(zoomRange)
                             // Same override path the sheet's zoom slider writes to.
                             scope.launch {
                                 prefs.setOverride(
@@ -433,9 +499,33 @@ fun ViewfinderScreen() {
                 }
             }
 
+            // Calibration runs over the live preview so the user judges the real
+            // scene, not a mock-up.
+            if (isCalibrating) {
+                CalibrationScreen(
+                    initialFactor = liveCalibration ?: storedCalibration ?: DEFAULT_CALIBRATION,
+                    isPortrait = isPortrait,
+                    onFactorChange = { liveCalibration = it },
+                    onConfirm = { factor ->
+                        scope.launch { prefs.setCalibration(factor, isPortrait) }
+                        liveCalibration = null
+                        isCalibrating = false
+                    },
+                    onCancel = {
+                        isCalibrating = false
+                        liveCalibration = null
+                        // Cancelling a first run leaves TrueSight rather than
+                        // stranding the user in an uncalibrated see-through view.
+                        if (storedCalibration == null) {
+                            scope.launch { prefs.setTrueSight(false) }
+                        }
+                    }
+                )
+            }
+
             // Top bar: exposure readout chip + edgeless/controls/info icons.
             // Every piece of it is gone while edgeless — any chrome breaks the illusion.
-            if (!isEdgeless) {
+            if (!isEdgeless && !isCalibrating) {
                 Row(
                     modifier = Modifier
                         .align(Alignment.TopCenter)
@@ -453,6 +543,26 @@ fun ViewfinderScreen() {
                         Icon(
                             imageVector = Icons.Default.Fullscreen,
                             contentDescription = "Edgeless mode",
+                            tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f),
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+
+                    // TrueSight toggle — edgeless plus scale calibration
+                    IconButton(onClick = { scope.launch { prefs.setTrueSight(true) } }) {
+                        Icon(
+                            imageVector = Icons.Default.Visibility,
+                            contentDescription = "TrueSight mode",
+                            tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f),
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+
+                    // Settings
+                    IconButton(onClick = { showSettings = true }) {
+                        Icon(
+                            imageVector = Icons.Default.Settings,
+                            contentDescription = "Settings",
                             tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f),
                             modifier = Modifier.size(24.dp)
                         )
@@ -493,13 +603,18 @@ fun ViewfinderScreen() {
             // Bottom stack: controls sheet (when open) above the always-present
             // shutter bar, so capture works in every mode.
             Column(modifier = Modifier.align(Alignment.BottomCenter)) {
-                if ((!isEdgeless || chromeVisible) && showControls && specs.isNotEmpty()) {
+                if (!isCalibrating &&
+                    (!isEdgeless || chromeVisible) &&
+                    showControls &&
+                    specs.isNotEmpty()
+                ) {
                     ControlsSheet(
                         specs = specs,
                         resolved = resolved,
                         overriddenIds = overrides.filterValues { it != null }.keys,
                         activePreset = activePreset,
                         userPresets = userPresets,
+                        userZoomRatio = userZoom,
                         isAbHolding = isAbHolding,
                         onOverride = { id, value ->
                             scope.launch {
@@ -533,7 +648,9 @@ fun ViewfinderScreen() {
                     )
                 }
 
-                if (!isEdgeless) {
+                if (isCalibrating) {
+                    // Calibration draws its own confirm bar.
+                } else if (!isEdgeless) {
                     CaptureBar(
                         thumbnail = lastShotThumb,
                         isCapturing = isCapturing,
@@ -553,6 +670,10 @@ fun ViewfinderScreen() {
                     ) {
                         EdgelessChrome(
                             isCapturing = isCapturing,
+                            isTrueSight = isTrueSight,
+                            // Only offer the reset when their own zoom has moved
+                            // off calibrated 1:1.
+                            canResetZoom = userZoom > 1.001f,
                             onShutter = {
                                 chromeRevealToken++
                                 onShutter()
@@ -561,7 +682,16 @@ fun ViewfinderScreen() {
                                 showControls = !showControls
                                 chromeRevealToken++
                             },
-                            onExit = { scope.launch { prefs.setEdgeless(false) } }
+                            onResetZoom = {
+                                chromeRevealToken++
+                                scope.launch { prefs.setOverride(ControlId.ZOOM_RATIO, null) }
+                            },
+                            onExit = {
+                                scope.launch {
+                                    prefs.setEdgeless(false)
+                                    prefs.setTrueSight(false)
+                                }
+                            }
                         )
                     }
                 }
@@ -574,14 +704,23 @@ fun ViewfinderScreen() {
 private const val CHROME_REVEAL_MS = 4000L
 
 /**
+ * Where the calibration drag starts on a first run — mid-range, so the user has
+ * room to move in both directions before hitting a bound.
+ */
+private const val DEFAULT_CALIBRATION = 1.6f
+
+/**
  * The only chrome edgeless mode ever shows: shutter, sheet handle, and a way
  * out. Double-tapping the preview leaves edgeless too.
  */
 @Composable
 private fun EdgelessChrome(
     isCapturing: Boolean,
+    isTrueSight: Boolean,
+    canResetZoom: Boolean,
     onShutter: () -> Unit,
     onToggleSheet: () -> Unit,
+    onResetZoom: () -> Unit,
     onExit: () -> Unit
 ) {
     Row(
@@ -591,6 +730,31 @@ private fun EdgelessChrome(
         horizontalArrangement = Arrangement.SpaceEvenly,
         verticalAlignment = Alignment.CenterVertically
     ) {
+        // "TS" explains why zoom feels different in this mode.
+        if (isTrueSight) {
+            Text(
+                text = "TS",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(MaterialTheme.colorScheme.background.copy(alpha = 0.6f))
+                    .padding(horizontal = 6.dp, vertical = 2.dp)
+            )
+        }
+
+        if (isTrueSight && canResetZoom) {
+            IconButton(onClick = onResetZoom, modifier = Modifier.size(48.dp)) {
+                Icon(
+                    imageVector = Icons.Default.Refresh,
+                    contentDescription = "Reset zoom to calibrated scale",
+                    tint = MaterialTheme.colorScheme.onBackground,
+                    modifier = Modifier.size(24.dp)
+                )
+            }
+        }
+
         IconButton(onClick = onToggleSheet, modifier = Modifier.size(48.dp)) {
             Icon(
                 imageVector = Icons.Default.Tune,

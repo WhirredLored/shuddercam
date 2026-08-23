@@ -19,6 +19,8 @@
 
 | C14 | PASS* | Edgeless fullscreen: hidden system bars with transient-swipe behaviour, cutout ALWAYS/SHORT_EDGES, FILL_CENTER preview, tap-reveal chrome fading after 4s, double-tap exit, keep-screen-on, persisted across cold start; deferred: notched-device verification of edge-to-edge coverage, no inset jump, and rotation without a flash |
 
+| C15 | PASS* | TrueSight: calibration composed into zoom inside the resolver, drag-to-calibrate flow with edge rulers, per-orientation persistence, TS badge, zoom reset to calibrated 1:1, Settings screen with recalibrate and brightness assist, 11 JVM tests; deferred: arm's-length verification that a hand behind the phone reads life-size and continuous |
+
 ## Milestone gates
 
 **M2 — Manual Control Engine [C05–C11] → tagged v0.2.0 (2026-08-23). GATE DEFERRED.**
@@ -41,3 +43,15 @@ The exit gate is behavioural and needs a device. A human must check, after an ap
 3. Save-as-custom names a preset from the current effective settings, it reappears after a
    restart along with the active selection, rename and delete work from the long-press menu,
    and deleting the active user preset drops back to Device Auto with overrides preserved.
+
+**M4 — Edgeless / TrueSight [C14–C15] → tagged v0.4.0 (2026-08-23). GATE DEFERRED.**
+Needs a notched or punch-hole device and an arm's-length judgement no emulator can make:
+1. Edgeless fills the entire panel including the cutout and gesture areas, with zero visible
+   chrome; single tap reveals the floating layer and it fades after 4s; double-tap exits.
+2. Transient system bars, brought back by an edge swipe, do not shift the layout, and rotating
+   while edgeless does not flash — if it does, add the ≤150ms black fade recorded in
+   DECISIONS.md as the fallback.
+3. TrueSight calibration: at arm's length, a hand held behind the phone appears life-size and
+   continuous with the real hand across the bezel; the factor survives a restart; pinch still
+   zooms on top of it and the reset returns to calibrated 1:1; portrait and landscape each hold
+   their own factor.

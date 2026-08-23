@@ -71,6 +71,7 @@ fun ControlsSheet(
     overriddenIds: Set<ControlId>,
     activePreset: Preset,
     userPresets: List<Preset>,
+    userZoomRatio: Float,
     isAbHolding: Boolean,
     onOverride: (ControlId, ControlValue?) -> Unit,
     onSelectPreset: (Preset) -> Unit,
@@ -122,7 +123,8 @@ fun ControlsSheet(
             SheetSection.FOCUS ->
                 FocusSection(specs, resolved, overriddenIds, onOverride, onFocusTouching)
             SheetSection.WB -> WbSection(specs, resolved, overriddenIds, onOverride)
-            SheetSection.MOTION -> MotionSection(specs, resolved, overriddenIds, onOverride)
+            SheetSection.MOTION ->
+                MotionSection(specs, resolved, overriddenIds, userZoomRatio, onOverride)
             SheetSection.CAPTURE -> CaptureSection(specs, resolved, overriddenIds, onOverride)
         }
     }
@@ -775,6 +777,7 @@ private fun MotionSection(
     specs: Map<ControlId, ControlSpec>,
     resolved: Map<ControlId, EffectiveSettings.Resolution>,
     overriddenIds: Set<ControlId>,
+    userZoomRatio: Float,
     onOverride: (ControlId, ControlValue?) -> Unit
 ) {
     val zoomSpec = specs[ControlId.ZOOM_RATIO]
@@ -782,16 +785,24 @@ private fun MotionSection(
     val fpsSpec = specs[ControlId.FPS_RANGE]
     val stabSpec = specs[ControlId.STABILIZATION_MODE]
 
-    // Zoom slider — same override path as the viewfinder pinch gesture
+    // Zoom slider — same override path as the viewfinder pinch gesture. Both
+    // edit the user's own zoom; TrueSight calibration is composed on top of it
+    // in the resolution layer, so the slider never multiplies itself.
     if (zoomSpec != null && zoomSpec.available && zoomSpec.floatRange != null) {
         val zoomRes = resolved[ControlId.ZOOM_RATIO] as? EffectiveSettings.Resolution.Resolved
-        val currentZoom = (zoomRes?.value as? ControlValue.FloatValue)?.value ?: 1.0f
+        val effectiveZoom = (zoomRes?.value as? ControlValue.FloatValue)?.value ?: userZoomRatio
+        val isCalibrated = effectiveZoom > userZoomRatio * 1.001f
 
         ControlSlider(
             label = "Zoom",
-            value = currentZoom,
+            value = userZoomRatio,
             range = zoomSpec.floatRange,
-            displayValue = String.format("%.1fx", currentZoom),
+            displayValue = if (isCalibrated) {
+                // Show what the camera is actually doing next to their own figure.
+                String.format("%.1fx  (%.1fx TS)", userZoomRatio, effectiveZoom)
+            } else {
+                String.format("%.1fx", userZoomRatio)
+            },
             isOverridden = ControlId.ZOOM_RATIO in overriddenIds,
             onReset = { onOverride(ControlId.ZOOM_RATIO, null) },
             onValueChange = { newZoom ->

@@ -7,6 +7,12 @@ package com.huestone.shuddercam.controls
  */
 object EffectiveSettings {
 
+    /** Calibration multiplier that changes nothing — TrueSight off. */
+    const val NO_CALIBRATION = 1.0f
+
+    /** Bounds the TrueSight calibration factor can be dragged between. */
+    val CALIBRATION_RANGE = 1.0f..3.0f
+
     /**
      * Result for a single control: either a resolved value (possibly clamped),
      * or Absent if the control is unsupported on this device.
@@ -23,7 +29,8 @@ object EffectiveSettings {
         id: ControlId,
         specs: Map<ControlId, ControlSpec>,
         activePreset: Preset,
-        overrides: Map<ControlId, ControlValue?>
+        overrides: Map<ControlId, ControlValue?>,
+        zoomCalibration: Float = NO_CALIBRATION
     ): Resolution {
         val spec = specs[id]
         if (spec == null || !spec.available) return Resolution.Absent
@@ -31,6 +38,15 @@ object EffectiveSettings {
         // Resolution chain: override → preset → device auto (null)
         val override = overrides[id]
         val raw = override ?: activePreset.value(id)
+
+        // TrueSight's calibration factor composes with the user's own zoom here,
+        // in the single place effective values are decided — never in the UI and
+        // never in the applier. The user's stored zoom stays untouched, so their
+        // pinch rides on top of calibration rather than replacing it.
+        if (id == ControlId.ZOOM_RATIO) {
+            val userZoom = (raw as? ControlValue.FloatValue)?.value ?: 1.0f
+            return clamp(ControlValue.FloatValue(userZoom * zoomCalibration), spec)
+        }
 
         if (raw == null) {
             // Device auto — no explicit value.
@@ -55,12 +71,22 @@ object EffectiveSettings {
     fun resolveAll(
         specs: Map<ControlId, ControlSpec>,
         activePreset: Preset,
-        overrides: Map<ControlId, ControlValue?>
+        overrides: Map<ControlId, ControlValue?>,
+        zoomCalibration: Float = NO_CALIBRATION
     ): Map<ControlId, Resolution> {
         return ControlId.entries.associateWith { id ->
-            resolve(id, specs, activePreset, overrides)
+            resolve(id, specs, activePreset, overrides, zoomCalibration)
         }
     }
+
+    /**
+     * The zoom the user themselves dialled in, with calibration stripped back
+     * out — what the zoom slider and the pinch gesture must read and write, so
+     * that editing it never compounds the calibration factor into itself.
+     */
+    fun userZoom(overrides: Map<ControlId, ControlValue?>, activePreset: Preset): Float =
+        ((overrides[ControlId.ZOOM_RATIO] ?: activePreset.value(ControlId.ZOOM_RATIO))
+            as? ControlValue.FloatValue)?.value ?: 1.0f
 
     /**
      * Collapses a resolution map into flat values — the preset layer and the

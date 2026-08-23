@@ -30,10 +30,18 @@ object EffectiveSettings {
         specs: Map<ControlId, ControlSpec>,
         activePreset: Preset,
         overrides: Map<ControlId, ControlValue?>,
-        zoomCalibration: Float = NO_CALIBRATION
+        zoomCalibration: Float = NO_CALIBRATION,
+        thermalTier: ThermalTier = ThermalTier.NORMAL
     ): Resolution {
         val spec = specs[id]
         if (spec == null || !spec.available) return Resolution.Absent
+
+        // A throttling device overrules everyone — user, preset and default alike.
+        // Governing here rather than in the applier keeps the readout honest: the
+        // UI shows what the camera is really doing, not what was asked for.
+        if (thermalTier != ThermalTier.NORMAL) {
+            governed(id, spec, activePreset, overrides, thermalTier)?.let { return it }
+        }
 
         // Resolution chain: override → preset → device auto (null)
         val override = overrides[id]
@@ -72,10 +80,11 @@ object EffectiveSettings {
         specs: Map<ControlId, ControlSpec>,
         activePreset: Preset,
         overrides: Map<ControlId, ControlValue?>,
-        zoomCalibration: Float = NO_CALIBRATION
+        zoomCalibration: Float = NO_CALIBRATION,
+        thermalTier: ThermalTier = ThermalTier.NORMAL
     ): Map<ControlId, Resolution> {
         return ControlId.entries.associateWith { id ->
-            resolve(id, specs, activePreset, overrides, zoomCalibration)
+            resolve(id, specs, activePreset, overrides, zoomCalibration, thermalTier)
         }
     }
 
@@ -87,6 +96,33 @@ object EffectiveSettings {
     fun userZoom(overrides: Map<ControlId, ControlValue?>, activePreset: Preset): Float =
         ((overrides[ControlId.ZOOM_RATIO] ?: activePreset.value(ControlId.ZOOM_RATIO))
             as? ControlValue.FloatValue)?.value ?: 1.0f
+
+    /**
+     * The thermal governor's verdict for one control, or null when this tier has
+     * nothing to say about it. Never throws and never clears a stored value —
+     * throttling changes what runs, not what the user saved.
+     */
+    private fun governed(
+        id: ControlId,
+        spec: ControlSpec,
+        activePreset: Preset,
+        overrides: Map<ControlId, ControlValue?>,
+        tier: ThermalTier
+    ): Resolution? = when (id) {
+        ControlId.TORCH_MODE ->
+            if (!tier.allowsTorch) Resolution.Resolved(ControlValue.BoolValue(false)) else null
+
+        ControlId.FPS_RANGE -> {
+            val raw = overrides[id] ?: activePreset.value(id)
+            val requested = raw as? ControlValue.IntRangeValue
+                ?: deviceAuto(id) as ControlValue.IntRangeValue
+            val available = spec.allowedIntRangeValues.orEmpty()
+            ThermalTier.governFpsRange(tier, requested, available)
+                ?.let { Resolution.Resolved(it, wasClamped = true) }
+        }
+
+        else -> null
+    }
 
     /**
      * Collapses a resolution map into flat values — the preset layer and the

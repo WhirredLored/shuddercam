@@ -2,9 +2,12 @@ package com.huestone.shuddercam.ui
 
 import android.Manifest
 import android.app.Activity
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.res.Configuration
+import android.os.BatteryManager
 import android.graphics.BitmapFactory
 import android.media.AudioManager
 import android.media.MediaActionSound
@@ -74,6 +77,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.huestone.shuddercam.brand.Brand
 import com.huestone.shuddercam.camera.CameraCaps
 import com.huestone.shuddercam.camera.CameraController
@@ -85,14 +90,39 @@ import com.huestone.shuddercam.controls.EffectiveSettings
 import com.huestone.shuddercam.controls.Preset
 import com.huestone.shuddercam.controls.PresetCodec
 import com.huestone.shuddercam.controls.Presets
+import com.huestone.shuddercam.controls.ThermalTier
 import com.huestone.shuddercam.data.Prefs
 import com.huestone.shuddercam.util.EdgelessController
 import com.huestone.shuddercam.util.ScreenBrightness
+import com.huestone.shuddercam.util.ThermalGovernor
+import kotlin.math.abs
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+/**
+ * ALLOCATION AUDIT (C16) — what was checked along the preview path and the loupe,
+ * by reading every allocation site on the way to a frame:
+ *
+ * - No per-frame app code exists at all: only Preview and ImageCapture are bound,
+ *   with no ImageAnalysis use case and no frame callback, so nothing of ours runs
+ *   between frames. PreviewView itself is built once inside the AndroidView
+ *   factory, never on recomposition.
+ * - The loupe allocates only while a finger is on the focus slider — it reads the
+ *   resolved value and formats one string per drag event, not per frame — and it
+ *   stands down entirely above ThermalTier.NORMAL.
+ * - Thermal and battery are event-driven (a PowerManager listener and the sticky
+ *   battery broadcast). Neither polls, so an idle preview does no work for either.
+ * - Settings resolve only when an input actually changes: resolveAll runs from a
+ *   LaunchedEffect keyed on overrides, specs, preset, calibration and thermal tier.
+ * - Capture-time objects (MediaActionSound, BitmapFactory.Options) are created per
+ *   shutter press, and the thumbnail decodes downsampled on Dispatchers.IO.
+ * - The pinch gesture no longer writes DataStore on every pointer event; see
+ *   ZOOM_WRITE_EPSILON.
+ *
+ * Sustained-session behaviour still needs a device: see the M5 gate in BUILDLOG.md.
+ */
 @Composable
 fun ViewfinderScreen() {
     val context = LocalContext.current
@@ -112,6 +142,8 @@ fun ViewfinderScreen() {
     var showSettings by remember { mutableStateOf(false) }
     var isCalibrating by remember { mutableStateOf(false) }
     var liveCalibration by remember { mutableStateOf<Float?>(null) }
+    var lowBatteryNotified by remember { mutableStateOf(false) }
+    var showLowBattery by remember { mutableStateOf(false) }
     var isCapturing by remember { mutableStateOf(false) }
     var isBlinking by remember { mutableStateOf(false) }
     var lastShotUri by remember { mutableStateOf<Uri?>(null) }
@@ -138,6 +170,11 @@ fun ViewfinderScreen() {
     val activePreset = remember(activePresetId, userPresets) {
         Presets.byId(activePresetId, userPresets)
     }
+
+    // Thermal tier and battery level: observed, never polled per frame.
+    val thermalTier by remember(context) { ThermalGovernor.tierFlow(context) }
+        .collectAsState(initial = ThermalTier.NORMAL)
+    val batteryPercent = rememberBatteryPercent()
 
     val configuration = LocalConfiguration.current
     val isPortrait = configuration.orientation == Configuration.ORIENTATION_PORTRAIT
@@ -199,6 +236,17 @@ fun ViewfinderScreen() {
         if (isTrueSight && storedCalibration == null && !isCalibrating) {
             liveCalibration = DEFAULT_CALIBRATION
             isCalibrating = true
+        }
+    }
+
+    // One warning per session, not a nag that returns every percent lost.
+    LaunchedEffect(batteryPercent) {
+        val percent = batteryPercent
+        if (percent != null && percent < LOW_BATTERY_PERCENT && !lowBatteryNotified) {
+            lowBatteryNotified = true
+            showLowBattery = true
+            delay(LOW_BATTERY_BANNER_MS)
+            showLowBattery = false
         }
     }
 
@@ -321,21 +369,40 @@ fun ViewfinderScreen() {
         // Resolve and apply whenever overrides, specs, or the A/B hold change.
         // Holding suspends overrides without clearing them, so releasing restores
         // the tweaked look immediately.
-        LaunchedEffect(overrides, specs, isAbHolding, activePreset, zoomCalibration) {
+        LaunchedEffect(overrides, specs, isAbHolding, activePreset, zoomCalibration, thermalTier) {
             if (specs.isNotEmpty()) {
                 val newResolved = EffectiveSettings.resolveAll(
                     specs = specs,
                     activePreset = activePreset,
                     overrides = if (isAbHolding) emptyMap() else overrides,
-                    zoomCalibration = zoomCalibration
+                    zoomCalibration = zoomCalibration,
+                    thermalTier = thermalTier
                 )
                 resolved = newResolved
                 cameraController.applySettings(newResolved)
             }
         }
 
+        // Backgrounding hands the camera back to the system; CameraX releases and
+        // rebinds the use cases around the lifecycle on its own. What it cannot do
+        // is know our manual settings, so they are restated on every resume — the
+        // rebound session would otherwise come back on defaults while the UI still
+        // showed the user's values. Window mode is restated for the same reason:
+        // system bars come back on their own after a task switch.
+        val resolvedForResume by rememberUpdatedState(resolved)
+        val edgelessForResume by rememberUpdatedState(isEdgeless)
         DisposableEffect(lifecycleOwner) {
+            val observer = LifecycleEventObserver { _, event ->
+                if (event == Lifecycle.Event.ON_RESUME) {
+                    cameraController.applySettings(resolvedForResume)
+                    (context as? Activity)?.let { activity ->
+                        EdgelessController.apply(activity, edgelessForResume, view)
+                    }
+                }
+            }
+            lifecycleOwner.lifecycle.addObserver(observer)
             onDispose {
+                lifecycleOwner.lifecycle.removeObserver(observer)
                 cameraController.unbind()
             }
         }
@@ -407,12 +474,17 @@ fun ViewfinderScreen() {
                             // Pinch edits the user's own zoom, which then rides on
                             // top of any TrueSight calibration.
                             val newZoom = (currentUserZoom * zoomChange).coerceIn(zoomRange)
-                            // Same override path the sheet's zoom slider writes to.
-                            scope.launch {
-                                prefs.setOverride(
-                                    ControlId.ZOOM_RATIO,
-                                    ControlValue.FloatValue(newZoom)
-                                )
+                            // A pinch delivers events far faster than the zoom can
+                            // visibly change; writing only on a real difference keeps
+                            // a gesture from becoming a burst of DataStore writes.
+                            if (abs(newZoom - currentUserZoom) > ZOOM_WRITE_EPSILON) {
+                                // Same override path the sheet's zoom slider writes to.
+                                scope.launch {
+                                    prefs.setOverride(
+                                        ControlId.ZOOM_RATIO,
+                                        ControlValue.FloatValue(newZoom)
+                                    )
+                                }
                             }
                         }
                     }
@@ -468,8 +540,10 @@ fun ViewfinderScreen() {
                 }
             )
 
-            // Center MF Loupe Assist Overlay when adjusting manual focus slider
-            if (isFocusTouching) {
+            // Center MF Loupe Assist Overlay when adjusting manual focus slider.
+            // It stands down while the device is throttling — it redraws on every
+            // drag frame, which is exactly the load a hot phone does not need.
+            if (isFocusTouching && thermalTier.allowsFocusLoupe) {
                 Box(
                     modifier = Modifier
                         .size(140.dp)
@@ -538,6 +612,8 @@ fun ViewfinderScreen() {
 
                     Spacer(modifier = Modifier.weight(1f))
 
+                    BatteryReadout(batteryPercent)
+
                     // Edgeless toggle
                     IconButton(onClick = { scope.launch { prefs.setEdgeless(true) } }) {
                         Icon(
@@ -586,6 +662,29 @@ fun ViewfinderScreen() {
                             tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f),
                             modifier = Modifier.size(24.dp)
                         )
+                    }
+                }
+            }
+
+            // Status banners. In edgeless and TrueSight they ride the tap-reveal
+            // layer rather than sitting permanently over the illusion.
+            if (!isCalibrating && (!isEdgeless || chromeVisible)) {
+                Column(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(top = if (isEdgeless) 24.dp else 64.dp)
+                ) {
+                    if (thermalTier == ThermalTier.SEVERE) {
+                        StatusBanner(
+                            "Device is hot — frame rate reduced and torch held off. " +
+                                "Everything you've set is safe."
+                        )
+                    }
+                    if (showLowBattery) {
+                        StatusBanner("Battery below $LOW_BATTERY_PERCENT%.")
+                    }
+                    if (isEdgeless && batteryPercent != null) {
+                        StatusBanner("Battery $batteryPercent%")
                     }
                 }
             }
@@ -708,6 +807,75 @@ private const val CHROME_REVEAL_MS = 4000L
  * room to move in both directions before hitting a bound.
  */
 private const val DEFAULT_CALIBRATION = 1.6f
+
+private const val LOW_BATTERY_PERCENT = 15
+private const val LOW_BATTERY_BANNER_MS = 6000L
+
+/** Smallest zoom change worth persisting, in zoom ratio units. */
+private const val ZOOM_WRITE_EPSILON = 0.005f
+
+/**
+ * Battery level, driven by the system's own sticky broadcast rather than by
+ * polling — it updates when the level actually changes and costs nothing while
+ * the preview runs.
+ */
+@Composable
+private fun rememberBatteryPercent(): Int? {
+    val context = LocalContext.current
+    var percent by remember { mutableStateOf<Int?>(null) }
+
+    DisposableEffect(context) {
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(ctx: Context?, intent: Intent?) {
+                val level = intent?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+                val scale = intent?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
+                if (level >= 0 && scale > 0) {
+                    percent = level * 100 / scale
+                }
+            }
+        }
+        val filter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
+        // The sticky broadcast delivers the current level immediately.
+        context.registerReceiver(receiver, filter)
+        onDispose { runCatching { context.unregisterReceiver(receiver) } }
+    }
+
+    return percent
+}
+
+@Composable
+private fun BatteryReadout(percent: Int?) {
+    if (percent == null) return
+    Text(
+        text = "$percent%",
+        style = MaterialTheme.typography.bodySmall,
+        color = if (percent < LOW_BATTERY_PERCENT) {
+            MaterialTheme.colorScheme.primary
+        } else {
+            MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f)
+        },
+        fontWeight = FontWeight.Medium,
+        modifier = Modifier.padding(horizontal = 8.dp)
+    )
+}
+
+/**
+ * A calm, non-blocking line of status. Never a dialog: nothing here is worth
+ * interrupting a shot for.
+ */
+@Composable
+private fun StatusBanner(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurface,
+        modifier = Modifier
+            .padding(horizontal = 24.dp, vertical = 4.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.85f))
+            .padding(horizontal = 12.dp, vertical = 6.dp)
+    )
+}
 
 /**
  * The only chrome edgeless mode ever shows: shutter, sheet handle, and a way

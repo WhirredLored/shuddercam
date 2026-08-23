@@ -21,6 +21,8 @@
 
 | C15 | PASS* | TrueSight: calibration composed into zoom inside the resolver, drag-to-calibrate flow with edge rulers, per-orientation persistence, TS badge, zoom reset to calibrated 1:1, Settings screen with recalibrate and brightness assist, 11 JVM tests; deferred: arm's-length verification that a hand behind the phone reads life-size and continuous |
 
+| C16 | PASS* | Thermal governor (tier policy pure and unit-tested, applied during resolution so recovery is automatic), battery readout with one low warning, allocation audit documented in ViewfinderScreen, settings and window mode restated on resume, 16 JVM tests; deferred: 45-minute soak and observing the tiers on real hardware |
+
 ## Milestone gates
 
 **M2 — Manual Control Engine [C05–C11] → tagged v0.2.0 (2026-08-23). GATE DEFERRED.**

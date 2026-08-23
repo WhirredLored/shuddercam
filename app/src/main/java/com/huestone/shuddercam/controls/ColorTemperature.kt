@@ -17,8 +17,13 @@ data class RggbGains(
  * Pure Kotlin conversion from Kelvin color temperature (2000K..8000K)
  * to RGGB color correction gains.
  *
- * Algorithm based on Planckian locus / Tanner Helland approximation
- * normalized relative to D65 (~6500K neutral baseline).
+ * Algorithm based on Planckian locus / Tanner Helland approximation,
+ * normalized so the green channel is the 1.0 reference.
+ *
+ * DIRECTION: the slider renders the selected illuminant's own tint — picking
+ * 3200K yields a warm (red-heavy) frame and 8000K a cool (blue-heavy) one.
+ * That is the creative "warm/cool" dial the UI presents, and it is the inverse
+ * of a compensating white balance, which would cancel the illuminant instead.
  */
 object ColorTemperature {
 
@@ -50,11 +55,11 @@ object ColorTemperature {
         val normG = g.coerceIn(1.0, 255.0)
         val normB = b.coerceIn(1.0, 255.0)
 
-        // Gains are inverse to emitted RGB color to balance back to white.
-        // Normalized so green gain = 1.0f (reference channel).
-        val redGain = (normG / normR).toFloat().coerceIn(0.5f, 4.0f)
+        // Gains carry the illuminant's own tint, normalized against green so the
+        // reference channel stays at 1.0f: low Kelvin boosts red, high boosts blue.
+        val redGain = (normR / normG).toFloat().coerceIn(0.5f, 4.0f)
         val greenGain = 1.0f
-        val blueGain = (normG / normB).toFloat().coerceIn(0.5f, 4.0f)
+        val blueGain = (normB / normG).toFloat().coerceIn(0.5f, 4.0f)
 
         return RggbGains(
             red = redGain,

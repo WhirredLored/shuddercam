@@ -18,6 +18,7 @@ enum class ControlId {
     COLOR_TEMP_K,
     ZOOM_RATIO,
     TORCH_MODE,
+    FLASH_MODE,
     FPS_RANGE,
     STABILIZATION_MODE,
     CAPTURE_FORMAT,

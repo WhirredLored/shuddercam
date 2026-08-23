@@ -39,6 +39,7 @@ class Prefs(private val context: Context) {
         private val KEY_COLOR_TEMP_K = intPreferencesKey("override_color_temp_k")
         private val KEY_ZOOM_RATIO = floatPreferencesKey("override_zoom_ratio")
         private val KEY_TORCH_MODE = booleanPreferencesKey("override_torch_mode")
+        private val KEY_FLASH_MODE = intPreferencesKey("override_flash_mode")
         private val KEY_FPS_RANGE_LOWER = intPreferencesKey("override_fps_range_lower")
         private val KEY_FPS_RANGE_UPPER = intPreferencesKey("override_fps_range_upper")
         private val KEY_STABILIZATION_MODE = intPreferencesKey("override_stabilization_mode")
@@ -65,6 +66,7 @@ class Prefs(private val context: Context) {
         prefs[KEY_COLOR_TEMP_K]?.let { map[ControlId.COLOR_TEMP_K] = ControlValue.IntValue(it) }
         prefs[KEY_ZOOM_RATIO]?.let { map[ControlId.ZOOM_RATIO] = ControlValue.FloatValue(it) }
         prefs[KEY_TORCH_MODE]?.let { map[ControlId.TORCH_MODE] = ControlValue.BoolValue(it) }
+        prefs[KEY_FLASH_MODE]?.let { map[ControlId.FLASH_MODE] = ControlValue.IntValue(it) }
         val fpsLower = prefs[KEY_FPS_RANGE_LOWER]
         val fpsUpper = prefs[KEY_FPS_RANGE_UPPER]
         if (fpsLower != null && fpsUpper != null) {
@@ -102,6 +104,7 @@ class Prefs(private val context: Context) {
                 ControlId.COLOR_TEMP_K -> prefs[KEY_COLOR_TEMP_K] = (value as ControlValue.IntValue).value
                 ControlId.ZOOM_RATIO -> prefs[KEY_ZOOM_RATIO] = (value as ControlValue.FloatValue).value
                 ControlId.TORCH_MODE -> prefs[KEY_TORCH_MODE] = (value as ControlValue.BoolValue).value
+                ControlId.FLASH_MODE -> prefs[KEY_FLASH_MODE] = (value as ControlValue.IntValue).value
                 ControlId.FPS_RANGE -> {
                     val range = value as ControlValue.IntRangeValue
                     prefs[KEY_FPS_RANGE_LOWER] = range.lower
@@ -128,6 +131,7 @@ class Prefs(private val context: Context) {
             ControlId.COLOR_TEMP_K -> prefs.remove(KEY_COLOR_TEMP_K)
             ControlId.ZOOM_RATIO -> prefs.remove(KEY_ZOOM_RATIO)
             ControlId.TORCH_MODE -> prefs.remove(KEY_TORCH_MODE)
+            ControlId.FLASH_MODE -> prefs.remove(KEY_FLASH_MODE)
             ControlId.FPS_RANGE -> {
                 prefs.remove(KEY_FPS_RANGE_LOWER)
                 prefs.remove(KEY_FPS_RANGE_UPPER)

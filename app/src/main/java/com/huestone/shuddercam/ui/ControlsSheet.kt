@@ -56,7 +56,64 @@ fun ControlsSheet(
         FocusSection(specs, resolved, onOverride, onFocusTouching)
         WbSection(specs, resolved, onOverride)
         MotionSection(specs, resolved, onOverride)
+        CaptureSection(specs, resolved, onOverride)
     }
+}
+
+@Composable
+private fun CaptureSection(
+    specs: Map<ControlId, ControlSpec>,
+    resolved: Map<ControlId, EffectiveSettings.Resolution>,
+    onOverride: (ControlId, ControlValue?) -> Unit
+) {
+    val flashSpec = specs[ControlId.FLASH_MODE]
+    if (flashSpec == null || !flashSpec.available) return
+
+    val allowed = flashSpec.allowedIntValues ?: return
+    val flashRes = resolved[ControlId.FLASH_MODE] as? EffectiveSettings.Resolution.Resolved
+    val current = (flashRes?.value as? ControlValue.IntValue)?.value
+
+    Spacer(modifier = Modifier.height(12.dp))
+    SectionLabel("Capture")
+
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = "Flash",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f),
+            modifier = Modifier.weight(1f)
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            // Off / Auto / On reads better than the numeric constant order.
+            FLASH_DISPLAY_ORDER.filter { it in allowed }.forEach { mode ->
+                FilterChip(
+                    selected = current == mode,
+                    onClick = { onOverride(ControlId.FLASH_MODE, ControlValue.IntValue(mode)) },
+                    label = { Text(flashModeName(mode)) },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
+                        selectedLabelColor = MaterialTheme.colorScheme.primary
+                    )
+                )
+            }
+        }
+    }
+}
+
+/** Off, Auto, On — CameraX numbers them 2, 0, 1 respectively. */
+private val FLASH_DISPLAY_ORDER = listOf(2, 0, 1)
+
+/**
+ * Names a CameraX ImageCapture.FLASH_MODE_* value.
+ */
+fun flashModeName(mode: Int): String = when (mode) {
+    0 -> "Auto"
+    1 -> "On"
+    2 -> "Off"
+    else -> "Mode $mode"
 }
 
 @Composable

@@ -10,3 +10,4 @@
 | C07 | PASS* | Focus controls: AF mode cycling, manual focus distance slider, focus loupe overlay; deferred: device verification of focus racking |
 | C08 | PASS* | White balance family with manual Kelvin control, RGGB gains conversion, JVM unit tests; row corrected 2026-08-23 — the commit actually left 4 ColorTemperatureTest cases failing, fixed before C09; deferred: device verification of warming/cooling |
 | C09 | PASS* | Zoom (pinch + slider on one override path), torch, frame rate and stabilization gated to probed options; deferred: device verification of pinch/slider sync, torch, and FPS cadence change |
+| C10 | PASS* | Still capture to Pictures/ShudderCam via MediaStore, flash-at-capture, blink + shutter sound + thumbnail handoff; JPEG-only (no DNG on CameraX 1.4.1); deferred: device verification that manual settings reach the capture request, EXIF orientation, and filename/timestamp |

@@ -7,6 +7,12 @@
 
     <uses-permission android:name="android.permission.CAMERA" />
 
+    <!-- Pre-Q has no scoped storage: writing into Pictures/ShudderCam needs this.
+         Q and above rely on MediaStore RELATIVE_PATH instead. -->
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
+
     <application
         android:allowBackup="true"
         android:label="@string/app_name"

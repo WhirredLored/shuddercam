@@ -1,13 +1,20 @@
 package com.huestone.shuddercam.ui
 
 import android.Manifest
+import android.content.Context
 import android.content.Intent
+import android.graphics.BitmapFactory
+import android.media.AudioManager
+import android.media.MediaActionSound
 import android.net.Uri
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.view.PreviewView
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -18,6 +25,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Info
@@ -43,7 +51,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
@@ -53,13 +65,17 @@ import androidx.core.content.ContextCompat
 import com.huestone.shuddercam.brand.Brand
 import com.huestone.shuddercam.camera.CameraCaps
 import com.huestone.shuddercam.camera.CameraController
+import com.huestone.shuddercam.camera.CaptureController
 import com.huestone.shuddercam.controls.ControlId
 import com.huestone.shuddercam.controls.ControlSpec
 import com.huestone.shuddercam.controls.ControlValue
 import com.huestone.shuddercam.controls.EffectiveSettings
 import com.huestone.shuddercam.controls.Presets
 import com.huestone.shuddercam.data.Prefs
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @Composable
 fun ViewfinderScreen() {
@@ -73,6 +89,12 @@ fun ViewfinderScreen() {
     var showDiagnostics by remember { mutableStateOf(false) }
     var showControls by remember { mutableStateOf(false) }
     var isFocusTouching by remember { mutableStateOf(false) }
+    var previewViewRef by remember { mutableStateOf<PreviewView?>(null) }
+    var isCapturing by remember { mutableStateOf(false) }
+    var isBlinking by remember { mutableStateOf(false) }
+    var lastShotUri by remember { mutableStateOf<Uri?>(null) }
+    var lastShotThumb by remember { mutableStateOf<ImageBitmap?>(null) }
+    var captureError by remember { mutableStateOf<String?>(null) }
     var allCaps by remember { mutableStateOf<List<CameraCaps>>(emptyList()) }
     var specs by remember { mutableStateOf<Map<ControlId, ControlSpec>>(emptyMap()) }
     var resolved by remember { mutableStateOf<Map<ControlId, EffectiveSettings.Resolution>>(emptyMap()) }
@@ -100,6 +122,23 @@ fun ViewfinderScreen() {
             permanentlyDenied = true
         }
         hasRequestedOnce = true
+    }
+
+    // Pre-Q writes go through a file path, which needs the storage permission.
+    val storagePermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { /* Denial surfaces as a capture error rather than blocking the viewfinder. */ }
+
+    LaunchedEffect(permissionGranted) {
+        if (permissionGranted && android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.Q) {
+            val granted = ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.WRITE_EXTERNAL_STORAGE
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+            if (!granted) {
+                storagePermissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+            }
+        }
     }
 
     if (showDiagnostics) {
@@ -188,6 +227,53 @@ fun ViewfinderScreen() {
             }
         }
 
+        // Shutter sound honors the system profile: silent and vibrate stay quiet,
+        // except where the platform enforces a shutter tone regardless.
+        val shutterSound = remember { MediaActionSound() }
+        DisposableEffect(Unit) {
+            shutterSound.load(MediaActionSound.SHUTTER_CLICK)
+            onDispose { shutterSound.release() }
+        }
+
+        // Keep EXIF orientation correct as the device rotates.
+        val configuration = LocalConfiguration.current
+        LaunchedEffect(configuration) {
+            previewViewRef?.display?.let { cameraController.setTargetRotation(it.rotation) }
+        }
+
+        LaunchedEffect(isBlinking) {
+            if (isBlinking) {
+                delay(90)
+                isBlinking = false
+            }
+        }
+
+        val onShutter = {
+            val capture = cameraController.imageCapture
+            if (capture != null && !isCapturing) {
+                isCapturing = true
+                captureError = null
+                isBlinking = true
+                if (shouldPlayShutterSound(context)) {
+                    shutterSound.play(MediaActionSound.SHUTTER_CLICK)
+                }
+                CaptureController.capture(context, capture) { result ->
+                    isCapturing = false
+                    when (result) {
+                        is CaptureController.Result.Saved -> {
+                            lastShotUri = result.uri
+                            scope.launch {
+                                lastShotThumb = loadThumbnail(context, result.uri)
+                            }
+                        }
+                        is CaptureController.Result.Failed -> {
+                            captureError = result.message
+                        }
+                    }
+                }
+            }
+        }
+
         val zoomSpec = specs[ControlId.ZOOM_RATIO]
         val zoomRange = zoomSpec?.floatRange ?: 1.0f..1.0f
         val zoomEnabled = zoomSpec != null && zoomSpec.available &&
@@ -197,7 +283,6 @@ fun ViewfinderScreen() {
         // the latest values rather than the ones captured when they were installed.
         val currentResolved by rememberUpdatedState(resolved)
         val currentIsMf by rememberUpdatedState(isMf)
-        var previewViewRef by remember { mutableStateOf<PreviewView?>(null) }
 
         Box(
             modifier = Modifier
@@ -319,9 +404,20 @@ fun ViewfinderScreen() {
                 }
             }
 
-            // Bottom controls sheet
-            if (showControls && specs.isNotEmpty()) {
-                Box(modifier = Modifier.align(Alignment.BottomCenter)) {
+            // Capture blink — brief dark veil over the preview, so the frame
+            // being taken is obvious without blinding a night-adapted eye.
+            if (isBlinking) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(MaterialTheme.colorScheme.background)
+                )
+            }
+
+            // Bottom stack: controls sheet (when open) above the always-present
+            // shutter bar, so capture works in every mode.
+            Column(modifier = Modifier.align(Alignment.BottomCenter)) {
+                if (showControls && specs.isNotEmpty()) {
                     ControlsSheet(
                         specs = specs,
                         resolved = resolved,
@@ -333,9 +429,124 @@ fun ViewfinderScreen() {
                         onFocusTouching = { isFocusTouching = it }
                     )
                 }
+
+                CaptureBar(
+                    thumbnail = lastShotThumb,
+                    isCapturing = isCapturing,
+                    errorMessage = captureError,
+                    onShutter = onShutter,
+                    onThumbnailClick = {
+                        lastShotUri?.let { uri -> openInSystemViewer(context, uri) }
+                    }
+                )
             }
         }
     }
+}
+
+/**
+ * Bottom capture bar: last-shot thumbnail on the left, shutter in the centre.
+ * There is no in-app gallery — the thumbnail hands off to the system viewer.
+ */
+@Composable
+private fun CaptureBar(
+    thumbnail: ImageBitmap?,
+    isCapturing: Boolean,
+    errorMessage: String?,
+    onShutter: () -> Unit,
+    onThumbnailClick: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.background.copy(alpha = 0.4f))
+            .padding(vertical = 12.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        if (errorMessage != null) {
+            Text(
+                text = errorMessage,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+        }
+
+        Box(modifier = Modifier.fillMaxWidth()) {
+            // Last shot thumbnail
+            Box(
+                modifier = Modifier
+                    .align(Alignment.CenterStart)
+                    .padding(start = 24.dp)
+                    .size(48.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(MaterialTheme.colorScheme.surface)
+                    .then(
+                        if (thumbnail != null) Modifier.clickable { onThumbnailClick() }
+                        else Modifier
+                    )
+            ) {
+                if (thumbnail != null) {
+                    Image(
+                        bitmap = thumbnail,
+                        contentDescription = "Last shot",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+            }
+
+            // Shutter button
+            Box(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .size(72.dp)
+                    .clip(CircleShape)
+                    .background(
+                        if (isCapturing) {
+                            MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
+                        } else {
+                            MaterialTheme.colorScheme.primary
+                        }
+                    )
+                    .border(3.dp, MaterialTheme.colorScheme.onBackground, CircleShape)
+                    .clickable(enabled = !isCapturing) { onShutter() }
+            )
+        }
+    }
+}
+
+/**
+ * True when the system profile allows a shutter tone. Devices whose region
+ * mandates the sound play it regardless — MediaActionSound owns that policy.
+ */
+private fun shouldPlayShutterSound(context: Context): Boolean {
+    val audio = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return false
+    return audio.ringerMode == AudioManager.RINGER_MODE_NORMAL
+}
+
+/**
+ * Decodes a downscaled thumbnail of a captured image off the main thread.
+ */
+private suspend fun loadThumbnail(context: Context, uri: Uri): ImageBitmap? =
+    withContext(Dispatchers.IO) {
+        runCatching {
+            context.contentResolver.openInputStream(uri)?.use { stream ->
+                val options = BitmapFactory.Options().apply { inSampleSize = 8 }
+                BitmapFactory.decodeStream(stream, null, options)?.asImageBitmap()
+            }
+        }.getOrNull()
+    }
+
+/**
+ * Hands the captured image to whatever viewer the OS provides.
+ */
+private fun openInSystemViewer(context: Context, uri: Uri) {
+    val intent = Intent(Intent.ACTION_VIEW).apply {
+        setDataAndType(uri, "image/*")
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    runCatching { context.startActivity(intent) }
 }
 
 @Composable

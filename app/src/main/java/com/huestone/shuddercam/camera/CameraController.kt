@@ -9,6 +9,7 @@ import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import androidx.camera.core.CameraControl
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.FocusMeteringAction
+import androidx.camera.core.ImageCapture
 import androidx.camera.core.MeteringPointFactory
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
@@ -36,6 +37,10 @@ class CameraController(private val context: Context) {
     private var cameraControl: CameraControl? = null
     private var camera2Control: Camera2CameraControl? = null
     private var preview: Preview? = null
+
+    /** Still-capture use case, bound alongside the preview. */
+    var imageCapture: ImageCapture? = null
+        private set
 
     /** All probed camera capabilities, populated on bind. */
     var allCaps: List<CameraCaps> = emptyList()
@@ -75,6 +80,16 @@ class CameraController(private val context: Context) {
                 it.surfaceProvider = previewView.surfaceProvider
             }
 
+            // MINIMIZE_LATENCY skips the pre-capture 3A routine, so a still is taken
+            // with exactly the settings the preview is showing — a 2s manual exposure
+            // stays a 2s manual exposure. Target rotation drives the JPEG's EXIF.
+            imageCapture = ImageCapture.Builder()
+                .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+                .build()
+                .also { capture ->
+                    previewView.display?.let { capture.targetRotation = it.rotation }
+                }
+
             val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
 
             provider.unbindAll()
@@ -82,7 +97,8 @@ class CameraController(private val context: Context) {
             val camera = provider.bindToLifecycle(
                 lifecycleOwner,
                 cameraSelector,
-                preview!!
+                preview!!,
+                imageCapture!!
             )
 
             cameraControl = camera.cameraControl
@@ -106,6 +122,14 @@ class CameraController(private val context: Context) {
         cameraControl = null
         camera2Control = null
         preview = null
+        imageCapture = null
+    }
+
+    /**
+     * Keeps EXIF orientation correct when the device rotates.
+     */
+    fun setTargetRotation(rotation: Int) {
+        imageCapture?.targetRotation = rotation
     }
 
     /**
@@ -124,7 +148,7 @@ class CameraController(private val context: Context) {
     fun applySettings(resolved: Map<ControlId, EffectiveSettings.Resolution>) {
         val c2c = camera2Control ?: return
         val cc = cameraControl ?: return
-        ControlApplier.apply(c2c, cc, resolved)
+        ControlApplier.apply(c2c, cc, imageCapture, resolved)
     }
 
     /**

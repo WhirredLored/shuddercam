@@ -128,6 +128,14 @@ data class ControlSpec(
                 available = caps.flashAvailable
             )
 
+            // FLASH_MODE: fires at capture only, distinct from the always-on torch.
+            // Values mirror CameraX ImageCapture: 0 = auto, 1 = on, 2 = off.
+            specs[ControlId.FLASH_MODE] = ControlSpec(
+                id = ControlId.FLASH_MODE,
+                available = caps.flashAvailable,
+                allowedIntValues = if (caps.flashAvailable) listOf(0, 1, 2) else null
+            )
+
             // FPS_RANGE: only the ranges the device actually reports are selectable
             val fpsOptions = caps.supportedFpsRanges
                 .distinct()
@@ -148,15 +156,14 @@ data class ControlSpec(
                 allowedIntValues = if (hasStab) stabModes else null
             )
 
-            // CAPTURE_FORMAT
+            // CAPTURE_FORMAT: absent. The capture pipeline writes JPEG only, so
+            // there is nothing to choose between even on a camera that reports RAW
+            // support — the probe still surfaces that fact in diagnostics.
+            // See DECISIONS.md for the DNG limitation behind this.
             specs[ControlId.CAPTURE_FORMAT] = ControlSpec(
                 id = ControlId.CAPTURE_FORMAT,
-                available = true,
-                allowedStringValues = if (caps.hasRawCapability) {
-                    listOf("JPEG", "RAW_JPEG")
-                } else {
-                    listOf("JPEG")
-                }
+                available = false,
+                allowedStringValues = listOf("JPEG")
             )
 
             // GRID_OVERLAY (always available — it's a UI-only control)

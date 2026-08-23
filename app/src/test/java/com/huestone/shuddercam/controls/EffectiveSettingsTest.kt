@@ -235,19 +235,61 @@ class EffectiveSettingsTest {
     }
 
     @Test
-    fun `capture format clamps invalid string to first allowed`() {
-        val overrides = mapOf<ControlId, ControlValue?>(
-            ControlId.CAPTURE_FORMAT to ControlValue.StringValue("TIFF") // Not supported
+    fun `capture format is absent because the pipeline is JPEG-only`() {
+        // Even a RAW-capable camera has nothing to choose between: CameraX 1.4.x
+        // cannot write DNG, so C10 keeps the control absent rather than faking it.
+        val result = EffectiveSettings.resolve(
+            ControlId.CAPTURE_FORMAT, specs, Presets.DEVICE_AUTO, emptyMap()
         )
 
-        val result = EffectiveSettings.resolve(
-            ControlId.CAPTURE_FORMAT, specs, Presets.DEVICE_AUTO, overrides
+        assertTrue(result is EffectiveSettings.Resolution.Absent)
+    }
+
+    @Test
+    fun `string clamping snaps an unsupported value to the first allowed one`() {
+        val spec = ControlSpec(
+            id = ControlId.CAPTURE_FORMAT,
+            available = true,
+            allowedStringValues = listOf("JPEG", "RAW_JPEG")
         )
+
+        val result = EffectiveSettings.clamp(ControlValue.StringValue("TIFF"), spec)
 
         assertTrue(result is EffectiveSettings.Resolution.Resolved)
         val resolved = result as EffectiveSettings.Resolution.Resolved
         assertEquals(ControlValue.StringValue("JPEG"), resolved.value)
         assertTrue(resolved.wasClamped)
+    }
+
+    @Test
+    fun `flash mode offers off auto and on where flash exists`() {
+        val spec = specs[ControlId.FLASH_MODE]!!
+        assertTrue(spec.available)
+        assertEquals(listOf(0, 1, 2), spec.allowedIntValues)
+    }
+
+    @Test
+    fun `flash mode defaults to off`() {
+        val result = EffectiveSettings.resolve(
+            ControlId.FLASH_MODE, specs, Presets.DEVICE_AUTO, emptyMap()
+        )
+
+        assertTrue(result is EffectiveSettings.Resolution.Resolved)
+        assertEquals(
+            ControlValue.IntValue(2),
+            (result as EffectiveSettings.Resolution.Resolved).value
+        )
+    }
+
+    @Test
+    fun `flash mode absent without flash hardware`() {
+        val noFlashSpecs = ControlSpec.deriveAll(fullCaps.copy(flashAvailable = false))
+
+        val result = EffectiveSettings.resolve(
+            ControlId.FLASH_MODE, noFlashSpecs, Presets.DEVICE_AUTO, emptyMap()
+        )
+
+        assertTrue(result is EffectiveSettings.Resolution.Absent)
     }
 
     @Test

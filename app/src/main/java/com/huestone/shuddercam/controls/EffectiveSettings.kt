@@ -79,6 +79,7 @@ object EffectiveSettings {
         ControlId.COLOR_TEMP_K -> ControlValue.IntValue(5500) // daylight
         ControlId.ZOOM_RATIO -> ControlValue.FloatValue(1.0f)
         ControlId.TORCH_MODE -> ControlValue.BoolValue(false)
+        ControlId.FLASH_MODE -> ControlValue.IntValue(2) // FLASH_MODE_OFF
         ControlId.FPS_RANGE -> ControlValue.IntRangeValue(15, 30)
         ControlId.STABILIZATION_MODE -> ControlValue.IntValue(0) // off
         ControlId.CAPTURE_FORMAT -> ControlValue.StringValue("JPEG")

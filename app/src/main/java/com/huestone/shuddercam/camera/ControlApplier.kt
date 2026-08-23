@@ -7,6 +7,7 @@ import androidx.camera.camera2.interop.Camera2CameraControl
 import androidx.camera.camera2.interop.CaptureRequestOptions
 import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import androidx.camera.core.CameraControl
+import androidx.camera.core.ImageCapture
 import com.huestone.shuddercam.controls.ControlId
 import com.huestone.shuddercam.controls.ControlValue
 import com.huestone.shuddercam.controls.EffectiveSettings
@@ -27,11 +28,13 @@ object ControlApplier {
      * Most controls are Camera2 capture-request options. Zoom and torch are
      * owned by CameraX itself, so they go through [cameraControl] — writing
      * CONTROL_ZOOM_RATIO / FLASH_MODE through interop would fight CameraX's
-     * own state for the same two knobs.
+     * own state for the same two knobs. Flash-at-capture lives on
+     * [imageCapture], which is null until the capture use case is bound.
      */
     fun apply(
         camera2Control: Camera2CameraControl,
         cameraControl: CameraControl,
+        imageCapture: ImageCapture?,
         resolved: Map<ControlId, EffectiveSettings.Resolution>
     ) {
         val builder = CaptureRequestOptions.Builder()
@@ -235,6 +238,16 @@ object ControlApplier {
             val torchOn = (torchRes.value as? ControlValue.BoolValue)?.value
             if (torchOn != null) {
                 cameraControl.enableTorch(torchOn)
+            }
+        }
+
+        // FLASH_MODE — fires at capture only, so it lives on the capture use case
+        val flashRes = resolved[ControlId.FLASH_MODE]
+        if (imageCapture != null && flashRes is EffectiveSettings.Resolution.Resolved) {
+            val mode = (flashRes.value as? ControlValue.IntValue)?.value
+            if (mode != null) {
+                imageCapture.flashMode = mode
+                if (flashRes.wasClamped) Log.w(TAG, "FLASH_MODE clamped to $mode")
             }
         }
     }

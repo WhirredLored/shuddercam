@@ -1,6 +1,7 @@
 package com.huestone.shuddercam.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -8,22 +9,35 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.huestone.shuddercam.controls.ControlId
@@ -35,16 +49,33 @@ import kotlin.math.roundToInt
 import kotlin.math.roundToLong
 
 /**
- * Bottom control sheet on the viewfinder. Currently implements the EXPOSURE
- * section; extended by later commits for focus, WB, zoom, etc.
+ * The control panel: one tabbed instrument over the whole control model.
+ *
+ * Section order is fixed (exposure → focus → WB → motion → capture) and a tab
+ * only exists when the device supports something inside it (Law 1). Every
+ * control that currently carries an override shows a reset glyph, which
+ * together form the at-a-glance map of what has been changed from stock.
  */
 @Composable
 fun ControlsSheet(
     specs: Map<ControlId, ControlSpec>,
     resolved: Map<ControlId, EffectiveSettings.Resolution>,
+    overriddenIds: Set<ControlId>,
+    presetName: String,
+    isAbHolding: Boolean,
     onOverride: (ControlId, ControlValue?) -> Unit,
+    onResetAll: () -> Unit,
+    onAbHoldChange: (Boolean) -> Unit,
     onFocusTouching: (Boolean) -> Unit = {}
 ) {
+    val sections = SheetSection.entries.filter { section ->
+        section.controlIds.any { specs[it]?.available == true }
+    }
+    if (sections.isEmpty()) return
+
+    var selected by remember(sections) { mutableStateOf(sections.first()) }
+    val activeSection = if (selected in sections) selected else sections.first()
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -52,74 +83,217 @@ fun ControlsSheet(
             .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.92f))
             .padding(horizontal = 16.dp, vertical = 12.dp)
     ) {
-        ExposureSection(specs, resolved, onOverride)
-        FocusSection(specs, resolved, onOverride, onFocusTouching)
-        WbSection(specs, resolved, onOverride)
-        MotionSection(specs, resolved, onOverride)
-        CaptureSection(specs, resolved, onOverride)
-    }
-}
-
-@Composable
-private fun CaptureSection(
-    specs: Map<ControlId, ControlSpec>,
-    resolved: Map<ControlId, EffectiveSettings.Resolution>,
-    onOverride: (ControlId, ControlValue?) -> Unit
-) {
-    val flashSpec = specs[ControlId.FLASH_MODE]
-    if (flashSpec == null || !flashSpec.available) return
-
-    val allowed = flashSpec.allowedIntValues ?: return
-    val flashRes = resolved[ControlId.FLASH_MODE] as? EffectiveSettings.Resolution.Resolved
-    val current = (flashRes?.value as? ControlValue.IntValue)?.value
-
-    Spacer(modifier = Modifier.height(12.dp))
-    SectionLabel("Capture")
-
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            text = "Flash",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f),
-            modifier = Modifier.weight(1f)
+        SheetHeader(
+            presetName = presetName,
+            isAbHolding = isAbHolding,
+            hasOverrides = overriddenIds.isNotEmpty(),
+            onResetAll = onResetAll,
+            onAbHoldChange = onAbHoldChange
         )
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            // Off / Auto / On reads better than the numeric constant order.
-            FLASH_DISPLAY_ORDER.filter { it in allowed }.forEach { mode ->
-                FilterChip(
-                    selected = current == mode,
-                    onClick = { onOverride(ControlId.FLASH_MODE, ControlValue.IntValue(mode)) },
-                    label = { Text(flashModeName(mode)) },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
-                        selectedLabelColor = MaterialTheme.colorScheme.primary
-                    )
-                )
-            }
+
+        SectionTabs(
+            sections = sections,
+            selected = activeSection,
+            onSelect = { selected = it }
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        when (activeSection) {
+            SheetSection.EXPOSURE -> ExposureSection(specs, resolved, overriddenIds, onOverride)
+            SheetSection.FOCUS ->
+                FocusSection(specs, resolved, overriddenIds, onOverride, onFocusTouching)
+            SheetSection.WB -> WbSection(specs, resolved, overriddenIds, onOverride)
+            SheetSection.MOTION -> MotionSection(specs, resolved, overriddenIds, onOverride)
+            SheetSection.CAPTURE -> CaptureSection(specs, resolved, overriddenIds, onOverride)
         }
     }
 }
 
-/** Off, Auto, On — CameraX numbers them 2, 0, 1 respectively. */
-private val FLASH_DISPLAY_ORDER = listOf(2, 0, 1)
+/**
+ * Fixed section order, each owning a stable list of controls.
+ */
+private enum class SheetSection(val label: String, val controlIds: List<ControlId>) {
+    EXPOSURE(
+        "Exposure",
+        listOf(
+            ControlId.AE_MODE,
+            ControlId.ISO,
+            ControlId.SHUTTER_NS,
+            ControlId.AE_COMPENSATION,
+            ControlId.AE_LOCK
+        )
+    ),
+    FOCUS("Focus", listOf(ControlId.AF_MODE, ControlId.FOCUS_DISTANCE)),
+    WB("WB", listOf(ControlId.AWB_MODE, ControlId.COLOR_TEMP_K, ControlId.AWB_LOCK)),
+    MOTION(
+        "Motion",
+        listOf(
+            ControlId.ZOOM_RATIO,
+            ControlId.TORCH_MODE,
+            ControlId.FPS_RANGE,
+            ControlId.STABILIZATION_MODE
+        )
+    ),
+    CAPTURE("Capture", listOf(ControlId.FLASH_MODE))
+}
+
+@Composable
+private fun SheetHeader(
+    presetName: String,
+    isAbHolding: Boolean,
+    hasOverrides: Boolean,
+    onResetAll: () -> Unit,
+    onAbHoldChange: (Boolean) -> Unit
+) {
+    var confirmVisible by remember { mutableStateOf(false) }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        // Press and hold to audition the preset alone — overrides are suspended
+        // for as long as the finger is down, never cleared.
+        FilterChip(
+            selected = !isAbHolding,
+            onClick = {},
+            label = { Text(if (isAbHolding) "$presetName (stock)" else presetName) },
+            modifier = Modifier.pointerInput(Unit) {
+                detectTapGestures(
+                    onPress = {
+                        onAbHoldChange(true)
+                        tryAwaitRelease()
+                        onAbHoldChange(false)
+                    }
+                )
+            },
+            colors = FilterChipDefaults.filterChipColors(
+                selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
+                selectedLabelColor = MaterialTheme.colorScheme.primary
+            )
+        )
+
+        Spacer(modifier = Modifier.weight(1f))
+
+        if (hasOverrides) {
+            TextButton(onClick = { confirmVisible = true }) {
+                Text("Reset all")
+            }
+        }
+    }
+
+    if (confirmVisible) {
+        AlertDialog(
+            onDismissRequest = { confirmVisible = false },
+            title = { Text("Reset all controls?") },
+            text = { Text("Every override is cleared and the camera returns to $presetName.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmVisible = false
+                    onResetAll()
+                }) {
+                    Text("Reset all")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmVisible = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+}
+
+@Composable
+private fun SectionTabs(
+    sections: List<SheetSection>,
+    selected: SheetSection,
+    onSelect: (SheetSection) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .heightIn(min = 48.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        sections.forEach { section ->
+            FilterChip(
+                selected = section == selected,
+                onClick = { onSelect(section) },
+                label = { Text(section.label) },
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
+                    selectedLabelColor = MaterialTheme.colorScheme.primary
+                )
+            )
+        }
+    }
+}
 
 /**
- * Names a CameraX ImageCapture.FLASH_MODE_* value.
+ * Label row shared by every control: name, optional live value, and the reset
+ * glyph that appears only while the control is overridden.
  */
-fun flashModeName(mode: Int): String = when (mode) {
-    0 -> "Auto"
-    1 -> "On"
-    2 -> "Off"
-    else -> "Mode $mode"
+@Composable
+private fun ControlRowHeader(
+    label: String,
+    displayValue: String? = null,
+    isOverridden: Boolean = false,
+    onReset: (() -> Unit)? = null
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f),
+            modifier = Modifier.weight(1f)
+        )
+        if (displayValue != null) {
+            Text(
+                text = displayValue,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary,
+                fontWeight = FontWeight.Medium
+            )
+        }
+        ResetGlyph(label = label, visible = isOverridden, onReset = onReset)
+    }
+}
+
+/**
+ * The override affordance. Occupies its 48dp slot either way so rows do not
+ * shift when an override appears or is cleared.
+ */
+@Composable
+private fun ResetGlyph(label: String, visible: Boolean, onReset: (() -> Unit)?) {
+    if (visible && onReset != null) {
+        IconButton(onClick = onReset, modifier = Modifier.size(48.dp)) {
+            Icon(
+                imageVector = Icons.Default.Refresh,
+                contentDescription = "Reset $label",
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(18.dp)
+            )
+        }
+    } else {
+        Spacer(modifier = Modifier.size(48.dp))
+    }
 }
 
 @Composable
 private fun ExposureSection(
     specs: Map<ControlId, ControlSpec>,
     resolved: Map<ControlId, EffectiveSettings.Resolution>,
+    overriddenIds: Set<ControlId>,
     onOverride: (ControlId, ControlValue?) -> Unit
 ) {
     val aeSpec = specs[ControlId.AE_MODE]
@@ -129,34 +303,20 @@ private fun ExposureSection(
     val aeMode = (aeRes.value as? ControlValue.IntValue)?.value ?: 1
     val isManual = aeMode == 0
 
-    SectionLabel("Exposure")
+    ControlRowHeader(
+        label = "Mode",
+        isOverridden = ControlId.AE_MODE in overriddenIds,
+        onReset = { onOverride(ControlId.AE_MODE, null) }
+    )
 
-    // AUTO / MANUAL chip
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        FilterChip(
-            selected = !isManual,
-            onClick = { onOverride(ControlId.AE_MODE, ControlValue.IntValue(1)) },
-            label = { Text("Auto") },
-            colors = FilterChipDefaults.filterChipColors(
-                selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
-                selectedLabelColor = MaterialTheme.colorScheme.primary
-            )
-        )
+        ModeChip("Auto", !isManual) { onOverride(ControlId.AE_MODE, ControlValue.IntValue(1)) }
         // Only show MANUAL chip if device supports AE_MODE_OFF
-        val hasManual = aeSpec.allowedIntValues?.contains(0) == true
-        if (hasManual) {
-            FilterChip(
-                selected = isManual,
-                onClick = { onOverride(ControlId.AE_MODE, ControlValue.IntValue(0)) },
-                label = { Text("Manual") },
-                colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
-                    selectedLabelColor = MaterialTheme.colorScheme.primary
-                )
-            )
+        if (aeSpec.allowedIntValues?.contains(0) == true) {
+            ModeChip("Manual", isManual) { onOverride(ControlId.AE_MODE, ControlValue.IntValue(0)) }
         }
     }
 
@@ -174,6 +334,8 @@ private fun ExposureSection(
                 value = currentIso.toFloat(),
                 range = isoSpec.intRange.first.toFloat()..isoSpec.intRange.last.toFloat(),
                 displayValue = "$currentIso",
+                isOverridden = ControlId.ISO in overriddenIds,
+                onReset = { onOverride(ControlId.ISO, null) },
                 onValueChange = { newVal ->
                     onOverride(ControlId.ISO, ControlValue.IntValue(newVal.roundToInt()))
                 }
@@ -189,15 +351,14 @@ private fun ExposureSection(
 
             val minNs = shutterSpec.longRange.first.toFloat().coerceAtLeast(1f)
             val maxNs = shutterSpec.longRange.last.toFloat()
-            val logMin = ln(minNs)
-            val logMax = ln(maxNs)
-            val logCurrent = ln(currentNs.toFloat().coerceAtLeast(1f))
 
             ControlSlider(
                 label = "Shutter",
-                value = logCurrent,
-                range = logMin..logMax,
+                value = ln(currentNs.toFloat().coerceAtLeast(1f)),
+                range = ln(minNs)..ln(maxNs),
                 displayValue = formatShutterSpeed(currentNs),
+                isOverridden = ControlId.SHUTTER_NS in overriddenIds,
+                onReset = { onOverride(ControlId.SHUTTER_NS, null) },
                 onValueChange = { logVal ->
                     val ns = kotlin.math.exp(logVal).roundToLong()
                         .coerceIn(shutterSpec.longRange)
@@ -218,6 +379,8 @@ private fun ExposureSection(
                 range = evSpec.intRange.first.toFloat()..evSpec.intRange.last.toFloat(),
                 displayValue = if (currentEv >= 0) "+$currentEv" else "$currentEv",
                 steps = evSpec.intRange.last - evSpec.intRange.first - 1,
+                isOverridden = ControlId.AE_COMPENSATION in overriddenIds,
+                onReset = { onOverride(ControlId.AE_COMPENSATION, null) },
                 onValueChange = { newVal ->
                     onOverride(ControlId.AE_COMPENSATION, ControlValue.IntValue(newVal.roundToInt()))
                 }
@@ -228,30 +391,344 @@ private fun ExposureSection(
         val aeLockSpec = specs[ControlId.AE_LOCK]
         if (aeLockSpec != null && aeLockSpec.available) {
             val lockRes = resolved[ControlId.AE_LOCK] as? EffectiveSettings.Resolution.Resolved
-            val locked = (lockRes?.value as? ControlValue.BoolValue)?.value ?: false
+            ToggleRow(
+                label = "AE Lock",
+                checked = (lockRes?.value as? ControlValue.BoolValue)?.value ?: false,
+                isOverridden = ControlId.AE_LOCK in overriddenIds,
+                onReset = { onOverride(ControlId.AE_LOCK, null) },
+                onCheckedChange = { onOverride(ControlId.AE_LOCK, ControlValue.BoolValue(it)) }
+            )
+        }
+    }
+}
 
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "AE Lock",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f),
-                    modifier = Modifier.weight(1f)
-                )
-                Switch(
-                    checked = locked,
-                    onCheckedChange = { newLocked ->
-                        onOverride(ControlId.AE_LOCK, ControlValue.BoolValue(newLocked))
-                    },
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = MaterialTheme.colorScheme.primary,
-                        checkedTrackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
-                    )
-                )
+@Composable
+private fun FocusSection(
+    specs: Map<ControlId, ControlSpec>,
+    resolved: Map<ControlId, EffectiveSettings.Resolution>,
+    overriddenIds: Set<ControlId>,
+    onOverride: (ControlId, ControlValue?) -> Unit,
+    onFocusTouching: (Boolean) -> Unit
+) {
+    val afSpec = specs[ControlId.AF_MODE]
+    if (afSpec == null || !afSpec.available) return
+
+    // Fixed-focus devices get no focus section (Law 1)
+    val fdSpec = specs[ControlId.FOCUS_DISTANCE]
+    val afModes = afSpec.allowedIntValues ?: return
+    if (afModes.isEmpty()) return
+
+    val afRes = resolved[ControlId.AF_MODE] as? EffectiveSettings.Resolution.Resolved ?: return
+    val currentAfMode = (afRes.value as? ControlValue.IntValue)?.value ?: 4
+
+    ControlRowHeader(
+        label = "Focus Mode",
+        isOverridden = ControlId.AF_MODE in overriddenIds,
+        onReset = { onOverride(ControlId.AF_MODE, null) }
+    )
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        if (afModes.contains(4)) {
+            ModeChip("Continuous", currentAfMode == 4) {
+                onOverride(ControlId.AF_MODE, ControlValue.IntValue(4))
             }
         }
+        if (afModes.contains(1)) {
+            ModeChip("Auto", currentAfMode == 1) {
+                onOverride(ControlId.AF_MODE, ControlValue.IntValue(1))
+            }
+        }
+        // Manual (mode 0) — only if device supports manual focus distance
+        if (afModes.contains(0) && fdSpec != null && fdSpec.available) {
+            ModeChip("Manual", currentAfMode == 0) {
+                onOverride(ControlId.AF_MODE, ControlValue.IntValue(0))
+            }
+        }
+    }
+
+    Spacer(modifier = Modifier.height(8.dp))
+
+    // Manual focus distance slider — only when AF is off
+    if (currentAfMode == 0 && fdSpec != null && fdSpec.available && fdSpec.floatRange != null) {
+        val fdRes = resolved[ControlId.FOCUS_DISTANCE] as? EffectiveSettings.Resolution.Resolved
+        val currentDist = (fdRes?.value as? ControlValue.FloatValue)?.value ?: 0f
+
+        FocusDistanceSlider(
+            value = currentDist,
+            range = fdSpec.floatRange,
+            isOverridden = ControlId.FOCUS_DISTANCE in overriddenIds,
+            onReset = { onOverride(ControlId.FOCUS_DISTANCE, null) },
+            onValueChange = { newDist ->
+                onOverride(ControlId.FOCUS_DISTANCE, ControlValue.FloatValue(newDist))
+            },
+            onTouchChange = onFocusTouching
+        )
+    }
+}
+
+@Composable
+private fun WbSection(
+    specs: Map<ControlId, ControlSpec>,
+    resolved: Map<ControlId, EffectiveSettings.Resolution>,
+    overriddenIds: Set<ControlId>,
+    onOverride: (ControlId, ControlValue?) -> Unit
+) {
+    val awbSpec = specs[ControlId.AWB_MODE]
+    if (awbSpec == null || !awbSpec.available) return
+
+    val allowedModes = awbSpec.allowedIntValues ?: return
+    if (allowedModes.isEmpty()) return
+
+    val awbRes = resolved[ControlId.AWB_MODE] as? EffectiveSettings.Resolution.Resolved ?: return
+    val currentAwbMode = (awbRes.value as? ControlValue.IntValue)?.value ?: 1
+    val isManualWb = currentAwbMode == 0
+
+    val tempSpec = specs[ControlId.COLOR_TEMP_K]
+
+    ControlRowHeader(
+        label = "WB Mode",
+        isOverridden = ControlId.AWB_MODE in overriddenIds,
+        onReset = { onOverride(ControlId.AWB_MODE, null) }
+    )
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        AWB_MODE_LABELS.forEach { (mode, label) ->
+            if (allowedModes.contains(mode)) {
+                ModeChip(label, currentAwbMode == mode) {
+                    onOverride(ControlId.AWB_MODE, ControlValue.IntValue(mode))
+                }
+            }
+        }
+        // Manual (0) — only if device supports AWB_OFF and a Kelvin range
+        if (allowedModes.contains(0) && tempSpec != null && tempSpec.available) {
+            ModeChip("Manual", isManualWb) {
+                onOverride(ControlId.AWB_MODE, ControlValue.IntValue(0))
+            }
+        }
+    }
+
+    Spacer(modifier = Modifier.height(8.dp))
+
+    if (isManualWb && tempSpec != null && tempSpec.available && tempSpec.intRange != null) {
+        val tempRes = resolved[ControlId.COLOR_TEMP_K] as? EffectiveSettings.Resolution.Resolved
+        val currentTemp = (tempRes?.value as? ControlValue.IntValue)?.value ?: 5500
+
+        ControlSlider(
+            label = "Color Temp",
+            value = currentTemp.toFloat(),
+            range = tempSpec.intRange.first.toFloat()..tempSpec.intRange.last.toFloat(),
+            displayValue = "${currentTemp}K",
+            isOverridden = ControlId.COLOR_TEMP_K in overriddenIds,
+            onReset = { onOverride(ControlId.COLOR_TEMP_K, null) },
+            onValueChange = { newVal ->
+                onOverride(ControlId.COLOR_TEMP_K, ControlValue.IntValue(newVal.roundToInt()))
+            }
+        )
+    } else {
+        // AWB Lock toggle (when in auto / preset AWB)
+        val lockSpec = specs[ControlId.AWB_LOCK]
+        if (lockSpec != null && lockSpec.available) {
+            val lockRes = resolved[ControlId.AWB_LOCK] as? EffectiveSettings.Resolution.Resolved
+            ToggleRow(
+                label = "AWB Lock",
+                checked = (lockRes?.value as? ControlValue.BoolValue)?.value ?: false,
+                isOverridden = ControlId.AWB_LOCK in overriddenIds,
+                onReset = { onOverride(ControlId.AWB_LOCK, null) },
+                onCheckedChange = { onOverride(ControlId.AWB_LOCK, ControlValue.BoolValue(it)) }
+            )
+        }
+    }
+}
+
+/** Named AWB modes in display order; Manual is appended separately. */
+private val AWB_MODE_LABELS = listOf(
+    1 to "Auto",
+    5 to "Daylight",
+    6 to "Cloudy",
+    2 to "Tungsten"
+)
+
+@Composable
+private fun MotionSection(
+    specs: Map<ControlId, ControlSpec>,
+    resolved: Map<ControlId, EffectiveSettings.Resolution>,
+    overriddenIds: Set<ControlId>,
+    onOverride: (ControlId, ControlValue?) -> Unit
+) {
+    val zoomSpec = specs[ControlId.ZOOM_RATIO]
+    val torchSpec = specs[ControlId.TORCH_MODE]
+    val fpsSpec = specs[ControlId.FPS_RANGE]
+    val stabSpec = specs[ControlId.STABILIZATION_MODE]
+
+    // Zoom slider — same override path as the viewfinder pinch gesture
+    if (zoomSpec != null && zoomSpec.available && zoomSpec.floatRange != null) {
+        val zoomRes = resolved[ControlId.ZOOM_RATIO] as? EffectiveSettings.Resolution.Resolved
+        val currentZoom = (zoomRes?.value as? ControlValue.FloatValue)?.value ?: 1.0f
+
+        ControlSlider(
+            label = "Zoom",
+            value = currentZoom,
+            range = zoomSpec.floatRange,
+            displayValue = String.format("%.1fx", currentZoom),
+            isOverridden = ControlId.ZOOM_RATIO in overriddenIds,
+            onReset = { onOverride(ControlId.ZOOM_RATIO, null) },
+            onValueChange = { newZoom ->
+                onOverride(ControlId.ZOOM_RATIO, ControlValue.FloatValue(newZoom))
+            }
+        )
+    }
+
+    // Torch toggle
+    if (torchSpec != null && torchSpec.available) {
+        val torchRes = resolved[ControlId.TORCH_MODE] as? EffectiveSettings.Resolution.Resolved
+        ToggleRow(
+            label = "Torch Light",
+            checked = (torchRes?.value as? ControlValue.BoolValue)?.value ?: false,
+            isOverridden = ControlId.TORCH_MODE in overriddenIds,
+            onReset = { onOverride(ControlId.TORCH_MODE, null) },
+            onCheckedChange = { onOverride(ControlId.TORCH_MODE, ControlValue.BoolValue(it)) }
+        )
+    }
+
+    // Frame rate — only the ranges this camera reports
+    val fpsOptions = fpsSpec?.allowedIntRangeValues
+    if (fpsSpec != null && fpsSpec.available && !fpsOptions.isNullOrEmpty()) {
+        val fpsRes = resolved[ControlId.FPS_RANGE] as? EffectiveSettings.Resolution.Resolved
+        val current = fpsRes?.value as? ControlValue.IntRangeValue
+
+        ControlRowHeader(
+            label = "Frame Rate",
+            isOverridden = ControlId.FPS_RANGE in overriddenIds,
+            onReset = { onOverride(ControlId.FPS_RANGE, null) }
+        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            fpsOptions.forEach { (lower, upper) ->
+                ModeChip(
+                    label = formatFpsRange(lower, upper),
+                    selected = current?.lower == lower && current.upper == upper
+                ) {
+                    onOverride(ControlId.FPS_RANGE, ControlValue.IntRangeValue(lower, upper))
+                }
+            }
+        }
+    }
+
+    // Stabilization — only the modes this camera reports
+    val stabModes = stabSpec?.allowedIntValues
+    if (stabSpec != null && stabSpec.available && !stabModes.isNullOrEmpty()) {
+        val stabRes = resolved[ControlId.STABILIZATION_MODE] as? EffectiveSettings.Resolution.Resolved
+        val currentStab = (stabRes?.value as? ControlValue.IntValue)?.value
+
+        ControlRowHeader(
+            label = "Stabilization",
+            isOverridden = ControlId.STABILIZATION_MODE in overriddenIds,
+            onReset = { onOverride(ControlId.STABILIZATION_MODE, null) }
+        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            stabModes.forEach { mode ->
+                ModeChip(stabilizationModeName(mode), currentStab == mode) {
+                    onOverride(ControlId.STABILIZATION_MODE, ControlValue.IntValue(mode))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CaptureSection(
+    specs: Map<ControlId, ControlSpec>,
+    resolved: Map<ControlId, EffectiveSettings.Resolution>,
+    overriddenIds: Set<ControlId>,
+    onOverride: (ControlId, ControlValue?) -> Unit
+) {
+    val flashSpec = specs[ControlId.FLASH_MODE]
+    if (flashSpec == null || !flashSpec.available) return
+
+    val allowed = flashSpec.allowedIntValues ?: return
+    val flashRes = resolved[ControlId.FLASH_MODE] as? EffectiveSettings.Resolution.Resolved
+    val current = (flashRes?.value as? ControlValue.IntValue)?.value
+
+    ControlRowHeader(
+        label = "Flash",
+        isOverridden = ControlId.FLASH_MODE in overriddenIds,
+        onReset = { onOverride(ControlId.FLASH_MODE, null) }
+    )
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        // Off / Auto / On reads better than the numeric constant order.
+        FLASH_DISPLAY_ORDER.filter { it in allowed }.forEach { mode ->
+            ModeChip(flashModeName(mode), current == mode) {
+                onOverride(ControlId.FLASH_MODE, ControlValue.IntValue(mode))
+            }
+        }
+    }
+}
+
+/** Off, Auto, On — CameraX numbers them 2, 0, 1 respectively. */
+private val FLASH_DISPLAY_ORDER = listOf(2, 0, 1)
+
+@Composable
+private fun ModeChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    FilterChip(
+        selected = selected,
+        onClick = onClick,
+        label = { Text(label) },
+        colors = FilterChipDefaults.filterChipColors(
+            selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
+            selectedLabelColor = MaterialTheme.colorScheme.primary
+        )
+    )
+}
+
+@Composable
+private fun ToggleRow(
+    label: String,
+    checked: Boolean,
+    isOverridden: Boolean,
+    onReset: () -> Unit,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f),
+            modifier = Modifier.weight(1f)
+        )
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            colors = SwitchDefaults.colors(
+                checkedThumbColor = MaterialTheme.colorScheme.primary,
+                checkedTrackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
+            )
+        )
+        ResetGlyph(label = label, visible = isOverridden, onReset = onReset)
     }
 }
 
@@ -262,26 +739,17 @@ private fun ControlSlider(
     range: ClosedFloatingPointRange<Float>,
     displayValue: String,
     steps: Int = 0,
+    isOverridden: Boolean = false,
+    onReset: (() -> Unit)? = null,
     onValueChange: (Float) -> Unit
 ) {
     Column(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = label,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
-            )
-            Text(
-                text = displayValue,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.primary,
-                fontWeight = FontWeight.Medium
-            )
-        }
+        ControlRowHeader(
+            label = label,
+            displayValue = displayValue,
+            isOverridden = isOverridden,
+            onReset = onReset
+        )
         Slider(
             value = value.coerceIn(range),
             onValueChange = onValueChange,
@@ -297,14 +765,36 @@ private fun ControlSlider(
 }
 
 @Composable
-private fun SectionLabel(text: String) {
-    Text(
-        text = text,
-        style = MaterialTheme.typography.labelLarge,
-        color = MaterialTheme.colorScheme.primary,
-        fontWeight = FontWeight.Bold,
-        modifier = Modifier.padding(bottom = 4.dp)
-    )
+private fun FocusDistanceSlider(
+    value: Float,
+    range: ClosedFloatingPointRange<Float>,
+    isOverridden: Boolean,
+    onReset: () -> Unit,
+    onValueChange: (Float) -> Unit,
+    onTouchChange: (Boolean) -> Unit
+) {
+    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+        ControlRowHeader(
+            label = "Focus Distance",
+            displayValue = formatDioptersAsMeters(value),
+            isOverridden = isOverridden,
+            onReset = onReset
+        )
+        Slider(
+            value = value.coerceIn(range),
+            onValueChange = { newVal ->
+                onTouchChange(true)
+                onValueChange(newVal)
+            },
+            onValueChangeFinished = { onTouchChange(false) },
+            valueRange = range,
+            colors = SliderDefaults.colors(
+                thumbColor = MaterialTheme.colorScheme.primary,
+                activeTrackColor = MaterialTheme.colorScheme.primary,
+                inactiveTrackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f)
+            )
+        )
+    }
 }
 
 /**
@@ -319,132 +809,6 @@ fun formatShutterSpeed(ns: Long): String {
             val frac = (1.0 / seconds).roundToInt()
             "1/${frac}"
         }
-    }
-}
-
-@Composable
-private fun FocusSection(
-    specs: Map<ControlId, ControlSpec>,
-    resolved: Map<ControlId, EffectiveSettings.Resolution>,
-    onOverride: (ControlId, ControlValue?) -> Unit,
-    onFocusTouching: (Boolean) -> Unit
-) {
-    val afSpec = specs[ControlId.AF_MODE]
-    if (afSpec == null || !afSpec.available) return
-
-    // Fixed-focus devices get no focus section (Law 1)
-    val fdSpec = specs[ControlId.FOCUS_DISTANCE]
-    val afModes = afSpec.allowedIntValues ?: return
-    if (afModes.isEmpty()) return
-
-    val afRes = resolved[ControlId.AF_MODE] as? EffectiveSettings.Resolution.Resolved ?: return
-    val currentAfMode = (afRes.value as? ControlValue.IntValue)?.value ?: 4
-
-    Spacer(modifier = Modifier.height(12.dp))
-    SectionLabel("Focus")
-
-    // AF mode chips: Continuous, Auto, Manual
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        // Continuous Picture (mode 4)
-        if (afModes.contains(4)) {
-            FilterChip(
-                selected = currentAfMode == 4,
-                onClick = { onOverride(ControlId.AF_MODE, ControlValue.IntValue(4)) },
-                label = { Text("Continuous") },
-                colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
-                    selectedLabelColor = MaterialTheme.colorScheme.primary
-                )
-            )
-        }
-        // Auto (mode 1)
-        if (afModes.contains(1)) {
-            FilterChip(
-                selected = currentAfMode == 1,
-                onClick = { onOverride(ControlId.AF_MODE, ControlValue.IntValue(1)) },
-                label = { Text("Auto") },
-                colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
-                    selectedLabelColor = MaterialTheme.colorScheme.primary
-                )
-            )
-        }
-        // Manual (mode 0) — only if device supports manual focus distance
-        if (afModes.contains(0) && fdSpec != null && fdSpec.available) {
-            FilterChip(
-                selected = currentAfMode == 0,
-                onClick = { onOverride(ControlId.AF_MODE, ControlValue.IntValue(0)) },
-                label = { Text("Manual") },
-                colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
-                    selectedLabelColor = MaterialTheme.colorScheme.primary
-                )
-            )
-        }
-    }
-
-    Spacer(modifier = Modifier.height(8.dp))
-
-    // Manual focus distance slider — only when AF is off
-    if (currentAfMode == 0 && fdSpec != null && fdSpec.available && fdSpec.floatRange != null) {
-        val fdRes = resolved[ControlId.FOCUS_DISTANCE] as? EffectiveSettings.Resolution.Resolved
-        val currentDist = (fdRes?.value as? ControlValue.FloatValue)?.value ?: 0f
-
-        FocusDistanceSlider(
-            value = currentDist,
-            range = fdSpec.floatRange,
-            onValueChange = { newDist ->
-                onOverride(ControlId.FOCUS_DISTANCE, ControlValue.FloatValue(newDist))
-            },
-            onTouchChange = onFocusTouching
-        )
-    }
-}
-
-@Composable
-private fun FocusDistanceSlider(
-    value: Float,
-    range: ClosedFloatingPointRange<Float>,
-    onValueChange: (Float) -> Unit,
-    onTouchChange: (Boolean) -> Unit
-) {
-    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "Focus Distance",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
-            )
-            Text(
-                text = formatDioptersAsMeters(value),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.primary,
-                fontWeight = FontWeight.Medium
-            )
-        }
-        Slider(
-            value = value.coerceIn(range),
-            onValueChange = { newVal ->
-                onTouchChange(true)
-                onValueChange(newVal)
-            },
-            onValueChangeFinished = {
-                onTouchChange(false)
-            },
-            valueRange = range,
-            colors = SliderDefaults.colors(
-                thumbColor = MaterialTheme.colorScheme.primary,
-                activeTrackColor = MaterialTheme.colorScheme.primary,
-                inactiveTrackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f)
-            )
-        )
     }
 }
 
@@ -463,276 +827,6 @@ fun formatDioptersAsMeters(diopters: Float): String {
     }
 }
 
-@Composable
-private fun WbSection(
-    specs: Map<ControlId, ControlSpec>,
-    resolved: Map<ControlId, EffectiveSettings.Resolution>,
-    onOverride: (ControlId, ControlValue?) -> Unit
-) {
-    val awbSpec = specs[ControlId.AWB_MODE]
-    if (awbSpec == null || !awbSpec.available) return
-
-    val allowedModes = awbSpec.allowedIntValues ?: return
-    if (allowedModes.isEmpty()) return
-
-    val awbRes = resolved[ControlId.AWB_MODE] as? EffectiveSettings.Resolution.Resolved ?: return
-    val currentAwbMode = (awbRes.value as? ControlValue.IntValue)?.value ?: 1
-    val isManualWb = currentAwbMode == 0
-
-    val tempSpec = specs[ControlId.COLOR_TEMP_K]
-
-    Spacer(modifier = Modifier.height(12.dp))
-    SectionLabel("White Balance")
-
-    // AWB mode chips
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
-    ) {
-        // Auto (1)
-        if (allowedModes.contains(1)) {
-            FilterChip(
-                selected = currentAwbMode == 1,
-                onClick = { onOverride(ControlId.AWB_MODE, ControlValue.IntValue(1)) },
-                label = { Text("Auto") },
-                colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
-                    selectedLabelColor = MaterialTheme.colorScheme.primary
-                )
-            )
-        }
-        // Daylight (5)
-        if (allowedModes.contains(5)) {
-            FilterChip(
-                selected = currentAwbMode == 5,
-                onClick = { onOverride(ControlId.AWB_MODE, ControlValue.IntValue(5)) },
-                label = { Text("Daylight") },
-                colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
-                    selectedLabelColor = MaterialTheme.colorScheme.primary
-                )
-            )
-        }
-        // Cloudy (6)
-        if (allowedModes.contains(6)) {
-            FilterChip(
-                selected = currentAwbMode == 6,
-                onClick = { onOverride(ControlId.AWB_MODE, ControlValue.IntValue(6)) },
-                label = { Text("Cloudy") },
-                colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
-                    selectedLabelColor = MaterialTheme.colorScheme.primary
-                )
-            )
-        }
-        // Incandescent (2)
-        if (allowedModes.contains(2)) {
-            FilterChip(
-                selected = currentAwbMode == 2,
-                onClick = { onOverride(ControlId.AWB_MODE, ControlValue.IntValue(2)) },
-                label = { Text("Tungsten") },
-                colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
-                    selectedLabelColor = MaterialTheme.colorScheme.primary
-                )
-            )
-        }
-        // Manual (0) — only if device supports AWB_OFF and COLOR_TEMP_K
-        if (allowedModes.contains(0) && tempSpec != null && tempSpec.available) {
-            FilterChip(
-                selected = isManualWb,
-                onClick = { onOverride(ControlId.AWB_MODE, ControlValue.IntValue(0)) },
-                label = { Text("Manual") },
-                colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
-                    selectedLabelColor = MaterialTheme.colorScheme.primary
-                )
-            )
-        }
-    }
-
-    Spacer(modifier = Modifier.height(8.dp))
-
-    if (isManualWb && tempSpec != null && tempSpec.available && tempSpec.intRange != null) {
-        val tempRes = resolved[ControlId.COLOR_TEMP_K] as? EffectiveSettings.Resolution.Resolved
-        val currentTemp = (tempRes?.value as? ControlValue.IntValue)?.value ?: 5500
-
-        ControlSlider(
-            label = "Color Temp",
-            value = currentTemp.toFloat(),
-            range = tempSpec.intRange.first.toFloat()..tempSpec.intRange.last.toFloat(),
-            displayValue = "${currentTemp}K",
-            onValueChange = { newVal ->
-                onOverride(ControlId.COLOR_TEMP_K, ControlValue.IntValue(newVal.roundToInt()))
-            }
-        )
-    } else {
-        // AWB Lock toggle (when in auto / preset AWB)
-        val lockSpec = specs[ControlId.AWB_LOCK]
-        if (lockSpec != null && lockSpec.available) {
-            val lockRes = resolved[ControlId.AWB_LOCK] as? EffectiveSettings.Resolution.Resolved
-            val locked = (lockRes?.value as? ControlValue.BoolValue)?.value ?: false
-
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "AWB Lock",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f),
-                    modifier = Modifier.weight(1f)
-                )
-                Switch(
-                    checked = locked,
-                    onCheckedChange = { newLocked ->
-                        onOverride(ControlId.AWB_LOCK, ControlValue.BoolValue(newLocked))
-                    },
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = MaterialTheme.colorScheme.primary,
-                        checkedTrackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
-                    )
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun MotionSection(
-    specs: Map<ControlId, ControlSpec>,
-    resolved: Map<ControlId, EffectiveSettings.Resolution>,
-    onOverride: (ControlId, ControlValue?) -> Unit
-) {
-    val zoomSpec = specs[ControlId.ZOOM_RATIO]
-    val torchSpec = specs[ControlId.TORCH_MODE]
-    val fpsSpec = specs[ControlId.FPS_RANGE]
-    val stabSpec = specs[ControlId.STABILIZATION_MODE]
-
-    val hasMotion = (zoomSpec != null && zoomSpec.available) ||
-            (torchSpec != null && torchSpec.available) ||
-            (fpsSpec != null && fpsSpec.available) ||
-            (stabSpec != null && stabSpec.available)
-
-    if (!hasMotion) return
-
-    Spacer(modifier = Modifier.height(12.dp))
-    SectionLabel("Motion")
-
-    // Zoom slider — same override path as the viewfinder pinch gesture
-    if (zoomSpec != null && zoomSpec.available && zoomSpec.floatRange != null) {
-        val zoomRes = resolved[ControlId.ZOOM_RATIO] as? EffectiveSettings.Resolution.Resolved
-        val currentZoom = (zoomRes?.value as? ControlValue.FloatValue)?.value ?: 1.0f
-
-        ControlSlider(
-            label = "Zoom",
-            value = currentZoom,
-            range = zoomSpec.floatRange,
-            displayValue = String.format("%.1fx", currentZoom),
-            onValueChange = { newZoom ->
-                onOverride(ControlId.ZOOM_RATIO, ControlValue.FloatValue(newZoom))
-            }
-        )
-    }
-
-    // Torch mode toggle
-    if (torchSpec != null && torchSpec.available) {
-        val torchRes = resolved[ControlId.TORCH_MODE] as? EffectiveSettings.Resolution.Resolved
-        val torchOn = (torchRes?.value as? ControlValue.BoolValue)?.value ?: false
-
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "Torch Light",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f),
-                modifier = Modifier.weight(1f)
-            )
-            Switch(
-                checked = torchOn,
-                onCheckedChange = { newTorch ->
-                    onOverride(ControlId.TORCH_MODE, ControlValue.BoolValue(newTorch))
-                },
-                colors = SwitchDefaults.colors(
-                    checkedThumbColor = MaterialTheme.colorScheme.primary,
-                    checkedTrackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
-                )
-            )
-        }
-    }
-
-    // Frame rate — only the ranges this camera reports
-    val fpsOptions = fpsSpec?.allowedIntRangeValues
-    if (fpsSpec != null && fpsSpec.available && !fpsOptions.isNullOrEmpty()) {
-        val fpsRes = resolved[ControlId.FPS_RANGE] as? EffectiveSettings.Resolution.Resolved
-        val current = fpsRes?.value as? ControlValue.IntRangeValue
-
-        Spacer(modifier = Modifier.height(4.dp))
-        Text(
-            text = "Frame Rate",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
-        )
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
-                .padding(vertical = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            fpsOptions.forEach { (lower, upper) ->
-                FilterChip(
-                    selected = current?.lower == lower && current.upper == upper,
-                    onClick = {
-                        onOverride(ControlId.FPS_RANGE, ControlValue.IntRangeValue(lower, upper))
-                    },
-                    label = { Text(formatFpsRange(lower, upper)) },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
-                        selectedLabelColor = MaterialTheme.colorScheme.primary
-                    )
-                )
-            }
-        }
-    }
-
-    // Stabilization — only the modes this camera reports
-    val stabModes = stabSpec?.allowedIntValues
-    if (stabSpec != null && stabSpec.available && !stabModes.isNullOrEmpty()) {
-        val stabRes = resolved[ControlId.STABILIZATION_MODE] as? EffectiveSettings.Resolution.Resolved
-        val currentStab = (stabRes?.value as? ControlValue.IntValue)?.value
-
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "Stabilization",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f),
-                modifier = Modifier.weight(1f)
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                stabModes.forEach { mode ->
-                    FilterChip(
-                        selected = currentStab == mode,
-                        onClick = {
-                            onOverride(ControlId.STABILIZATION_MODE, ControlValue.IntValue(mode))
-                        },
-                        label = { Text(stabilizationModeName(mode)) },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
-                            selectedLabelColor = MaterialTheme.colorScheme.primary
-                        )
-                    )
-                }
-            }
-        }
-    }
-}
-
 /**
  * Formats a target FPS range as a chip label: "30" for fixed, "15–30" for a range.
  */
@@ -747,5 +841,15 @@ fun stabilizationModeName(mode: Int): String = when (mode) {
     0 -> "Off"
     1 -> "On"
     2 -> "Preview"
+    else -> "Mode $mode"
+}
+
+/**
+ * Names a CameraX ImageCapture.FLASH_MODE_* value.
+ */
+fun flashModeName(mode: Int): String = when (mode) {
+    0 -> "Auto"
+    1 -> "On"
+    2 -> "Off"
     else -> "Mode $mode"
 }

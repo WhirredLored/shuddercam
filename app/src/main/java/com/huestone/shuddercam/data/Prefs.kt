@@ -117,6 +117,15 @@ class Prefs(private val context: Context) {
         }
     }
 
+    /**
+     * Clears every override at once, returning the camera to the active preset.
+     */
+    suspend fun clearAllOverrides() {
+        context.dataStore.edit { prefs ->
+            ControlId.entries.forEach { id -> clearOverrideKey(prefs, id) }
+        }
+    }
+
     private fun clearOverrideKey(prefs: androidx.datastore.preferences.core.MutablePreferences, id: ControlId) {
         when (id) {
             ControlId.AE_MODE -> prefs.remove(KEY_AE_MODE)

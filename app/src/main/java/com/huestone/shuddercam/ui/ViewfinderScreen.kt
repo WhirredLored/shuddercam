@@ -90,6 +90,7 @@ fun ViewfinderScreen() {
     var showControls by remember { mutableStateOf(false) }
     var isFocusTouching by remember { mutableStateOf(false) }
     var previewViewRef by remember { mutableStateOf<PreviewView?>(null) }
+    var isAbHolding by remember { mutableStateOf(false) }
     var isCapturing by remember { mutableStateOf(false) }
     var isBlinking by remember { mutableStateOf(false) }
     var lastShotUri by remember { mutableStateOf<Uri?>(null) }
@@ -208,13 +209,15 @@ fun ViewfinderScreen() {
     } else {
         val cameraController = remember { CameraController(context) }
 
-        // Resolve and apply whenever overrides or specs change
-        LaunchedEffect(overrides, specs) {
+        // Resolve and apply whenever overrides, specs, or the A/B hold change.
+        // Holding suspends overrides without clearing them, so releasing restores
+        // the tweaked look immediately.
+        LaunchedEffect(overrides, specs, isAbHolding) {
             if (specs.isNotEmpty()) {
                 val newResolved = EffectiveSettings.resolveAll(
                     specs = specs,
                     activePreset = Presets.DEVICE_AUTO,
-                    overrides = overrides
+                    overrides = if (isAbHolding) emptyMap() else overrides
                 )
                 resolved = newResolved
                 cameraController.applySettings(newResolved)
@@ -421,11 +424,16 @@ fun ViewfinderScreen() {
                     ControlsSheet(
                         specs = specs,
                         resolved = resolved,
+                        overriddenIds = overrides.filterValues { it != null }.keys,
+                        presetName = Presets.DEVICE_AUTO.displayName,
+                        isAbHolding = isAbHolding,
                         onOverride = { id, value ->
                             scope.launch {
                                 prefs.setOverride(id, value)
                             }
                         },
+                        onResetAll = { scope.launch { prefs.clearAllOverrides() } },
+                        onAbHoldChange = { isAbHolding = it },
                         onFocusTouching = { isFocusTouching = it }
                     )
                 }

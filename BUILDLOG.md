@@ -9,3 +9,4 @@
 | C06 | PASS* | Exposure controls: ControlApplier, ControlsSheet, DataStore Prefs, exposure readout; deferred: device verification of manual ISO/shutter changes |
 | C07 | PASS* | Focus controls: AF mode cycling, manual focus distance slider, focus loupe overlay; deferred: device verification of focus racking |
 | C08 | PASS* | White balance family with manual Kelvin control, RGGB gains conversion, JVM unit tests; row corrected 2026-08-23 — the commit actually left 4 ColorTemperatureTest cases failing, fixed before C09; deferred: device verification of warming/cooling |
+| C09 | PASS* | Zoom (pinch + slider on one override path), torch, frame rate and stabilization gated to probed options; deferred: device verification of pinch/slider sync, torch, and FPS cadence change |

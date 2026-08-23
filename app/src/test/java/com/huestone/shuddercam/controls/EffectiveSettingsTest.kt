@@ -251,6 +251,114 @@ class EffectiveSettingsTest {
     }
 
     @Test
+    fun `fps range override matching a probed option is not clamped`() {
+        val overrides = mapOf<ControlId, ControlValue?>(
+            ControlId.FPS_RANGE to ControlValue.IntRangeValue(30, 30)
+        )
+
+        val result = EffectiveSettings.resolve(
+            ControlId.FPS_RANGE, specs, Presets.DEVICE_AUTO, overrides
+        )
+
+        val resolved = result as EffectiveSettings.Resolution.Resolved
+        assertEquals(ControlValue.IntRangeValue(30, 30), resolved.value)
+        assertFalse(resolved.wasClamped)
+    }
+
+    @Test
+    fun `fps range override outside probed options snaps to nearest`() {
+        val overrides = mapOf<ControlId, ControlValue?>(
+            // 60fps device migrated onto a 30fps-max camera
+            ControlId.FPS_RANGE to ControlValue.IntRangeValue(60, 60)
+        )
+
+        val result = EffectiveSettings.resolve(
+            ControlId.FPS_RANGE, specs, Presets.DEVICE_AUTO, overrides
+        )
+
+        val resolved = result as EffectiveSettings.Resolution.Resolved
+        assertEquals(ControlValue.IntRangeValue(30, 30), resolved.value)
+        assertTrue(resolved.wasClamped)
+    }
+
+    @Test
+    fun `fps device auto snaps into the probed options`() {
+        // Device offers only 24 and 60 fps; the 15-30 default matches neither.
+        val caps = fullCaps.copy(supportedFpsRanges = listOf(24 to 24, 60 to 60))
+        val narrowSpecs = ControlSpec.deriveAll(caps)
+
+        val result = EffectiveSettings.resolve(
+            ControlId.FPS_RANGE, narrowSpecs, Presets.DEVICE_AUTO, emptyMap()
+        )
+
+        val resolved = result as EffectiveSettings.Resolution.Resolved
+        assertEquals(ControlValue.IntRangeValue(24, 24), resolved.value)
+    }
+
+    @Test
+    fun `fps range absent when device reports no ranges`() {
+        val caps = fullCaps.copy(supportedFpsRanges = emptyList())
+        val noFpsSpecs = ControlSpec.deriveAll(caps)
+
+        val result = EffectiveSettings.resolve(
+            ControlId.FPS_RANGE, noFpsSpecs, Presets.DEVICE_AUTO, emptyMap()
+        )
+
+        assertTrue(result is EffectiveSettings.Resolution.Absent)
+    }
+
+    @Test
+    fun `stabilization exposes only probed modes`() {
+        val spec = specs[ControlId.STABILIZATION_MODE]!!
+        assertTrue(spec.available)
+        assertEquals(listOf(0, 1), spec.allowedIntValues)
+    }
+
+    @Test
+    fun `stabilization absent when device offers a single mode`() {
+        val caps = fullCaps.copy(availableVideoStabilizationModes = listOf(0))
+        val noStabSpecs = ControlSpec.deriveAll(caps)
+
+        val result = EffectiveSettings.resolve(
+            ControlId.STABILIZATION_MODE, noStabSpecs, Presets.DEVICE_AUTO, emptyMap()
+        )
+
+        assertTrue(result is EffectiveSettings.Resolution.Absent)
+    }
+
+    @Test
+    fun `stabilization override outside probed modes snaps to nearest`() {
+        val overrides = mapOf<ControlId, ControlValue?>(
+            ControlId.STABILIZATION_MODE to ControlValue.IntValue(2) // PREVIEW, unsupported here
+        )
+
+        val result = EffectiveSettings.resolve(
+            ControlId.STABILIZATION_MODE, specs, Presets.DEVICE_AUTO, overrides
+        )
+
+        val resolved = result as EffectiveSettings.Resolution.Resolved
+        assertEquals(ControlValue.IntValue(1), resolved.value)
+        assertTrue(resolved.wasClamped)
+    }
+
+    @Test
+    fun `torch and zoom absent on hardware that lacks them`() {
+        val caps = fullCaps.copy(flashAvailable = false, zoomRatioRange = null)
+        val bareSpecs = ControlSpec.deriveAll(caps)
+
+        assertTrue(
+            EffectiveSettings.resolve(
+                ControlId.TORCH_MODE, bareSpecs, Presets.DEVICE_AUTO, emptyMap()
+            ) is EffectiveSettings.Resolution.Absent
+        )
+        assertTrue(
+            EffectiveSettings.resolve(
+                ControlId.ZOOM_RATIO, bareSpecs, Presets.DEVICE_AUTO, emptyMap()
+            ) is EffectiveSettings.Resolution.Absent
+        )
+    }
+
+    @Test
     fun `clamping - below-range shutter speed gets clamped up`() {
         val overrides = mapOf<ControlId, ControlValue?>(
             ControlId.SHUTTER_NS to ControlValue.LongValue(1L) // Below 1000 min

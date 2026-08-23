@@ -1,6 +1,7 @@
 package com.huestone.shuddercam.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -18,6 +19,7 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -53,6 +55,7 @@ fun ControlsSheet(
         ExposureSection(specs, resolved, onOverride)
         FocusSection(specs, resolved, onOverride, onFocusTouching)
         WbSection(specs, resolved, onOverride)
+        MotionSection(specs, resolved, onOverride)
     }
 }
 
@@ -392,7 +395,7 @@ private fun FocusDistanceSlider(
  * Converts diopters (focus distance) to a human-readable meters label.
  * 0 diopters = infinity; higher diopters = closer.
  */
-private fun formatDioptersAsMeters(diopters: Float): String {
+fun formatDioptersAsMeters(diopters: Float): String {
     if (diopters <= 0.01f) return "∞"
     val meters = 1.0f / diopters
     return when {
@@ -536,4 +539,156 @@ private fun WbSection(
             }
         }
     }
+}
+
+@Composable
+private fun MotionSection(
+    specs: Map<ControlId, ControlSpec>,
+    resolved: Map<ControlId, EffectiveSettings.Resolution>,
+    onOverride: (ControlId, ControlValue?) -> Unit
+) {
+    val zoomSpec = specs[ControlId.ZOOM_RATIO]
+    val torchSpec = specs[ControlId.TORCH_MODE]
+    val fpsSpec = specs[ControlId.FPS_RANGE]
+    val stabSpec = specs[ControlId.STABILIZATION_MODE]
+
+    val hasMotion = (zoomSpec != null && zoomSpec.available) ||
+            (torchSpec != null && torchSpec.available) ||
+            (fpsSpec != null && fpsSpec.available) ||
+            (stabSpec != null && stabSpec.available)
+
+    if (!hasMotion) return
+
+    Spacer(modifier = Modifier.height(12.dp))
+    SectionLabel("Motion")
+
+    // Zoom slider — same override path as the viewfinder pinch gesture
+    if (zoomSpec != null && zoomSpec.available && zoomSpec.floatRange != null) {
+        val zoomRes = resolved[ControlId.ZOOM_RATIO] as? EffectiveSettings.Resolution.Resolved
+        val currentZoom = (zoomRes?.value as? ControlValue.FloatValue)?.value ?: 1.0f
+
+        ControlSlider(
+            label = "Zoom",
+            value = currentZoom,
+            range = zoomSpec.floatRange,
+            displayValue = String.format("%.1fx", currentZoom),
+            onValueChange = { newZoom ->
+                onOverride(ControlId.ZOOM_RATIO, ControlValue.FloatValue(newZoom))
+            }
+        )
+    }
+
+    // Torch mode toggle
+    if (torchSpec != null && torchSpec.available) {
+        val torchRes = resolved[ControlId.TORCH_MODE] as? EffectiveSettings.Resolution.Resolved
+        val torchOn = (torchRes?.value as? ControlValue.BoolValue)?.value ?: false
+
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Torch Light",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f),
+                modifier = Modifier.weight(1f)
+            )
+            Switch(
+                checked = torchOn,
+                onCheckedChange = { newTorch ->
+                    onOverride(ControlId.TORCH_MODE, ControlValue.BoolValue(newTorch))
+                },
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = MaterialTheme.colorScheme.primary,
+                    checkedTrackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
+                )
+            )
+        }
+    }
+
+    // Frame rate — only the ranges this camera reports
+    val fpsOptions = fpsSpec?.allowedIntRangeValues
+    if (fpsSpec != null && fpsSpec.available && !fpsOptions.isNullOrEmpty()) {
+        val fpsRes = resolved[ControlId.FPS_RANGE] as? EffectiveSettings.Resolution.Resolved
+        val current = fpsRes?.value as? ControlValue.IntRangeValue
+
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = "Frame Rate",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
+        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            fpsOptions.forEach { (lower, upper) ->
+                FilterChip(
+                    selected = current?.lower == lower && current.upper == upper,
+                    onClick = {
+                        onOverride(ControlId.FPS_RANGE, ControlValue.IntRangeValue(lower, upper))
+                    },
+                    label = { Text(formatFpsRange(lower, upper)) },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
+                        selectedLabelColor = MaterialTheme.colorScheme.primary
+                    )
+                )
+            }
+        }
+    }
+
+    // Stabilization — only the modes this camera reports
+    val stabModes = stabSpec?.allowedIntValues
+    if (stabSpec != null && stabSpec.available && !stabModes.isNullOrEmpty()) {
+        val stabRes = resolved[ControlId.STABILIZATION_MODE] as? EffectiveSettings.Resolution.Resolved
+        val currentStab = (stabRes?.value as? ControlValue.IntValue)?.value
+
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Stabilization",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f),
+                modifier = Modifier.weight(1f)
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                stabModes.forEach { mode ->
+                    FilterChip(
+                        selected = currentStab == mode,
+                        onClick = {
+                            onOverride(ControlId.STABILIZATION_MODE, ControlValue.IntValue(mode))
+                        },
+                        label = { Text(stabilizationModeName(mode)) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
+                            selectedLabelColor = MaterialTheme.colorScheme.primary
+                        )
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Formats a target FPS range as a chip label: "30" for fixed, "15–30" for a range.
+ */
+fun formatFpsRange(lower: Int, upper: Int): String =
+    if (lower == upper) "$upper" else "$lower–$upper"
+
+/**
+ * Names a CONTROL_VIDEO_STABILIZATION_MODE value. Unknown vendor modes keep
+ * their raw number rather than being hidden or renamed.
+ */
+fun stabilizationModeName(mode: Int): String = when (mode) {
+    0 -> "Off"
+    1 -> "On"
+    2 -> "Preview"
+    else -> "Mode $mode"
 }

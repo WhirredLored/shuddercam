@@ -6,6 +6,7 @@ import android.util.Range
 import androidx.camera.camera2.interop.Camera2CameraControl
 import androidx.camera.camera2.interop.CaptureRequestOptions
 import androidx.camera.camera2.interop.ExperimentalCamera2Interop
+import androidx.camera.core.CameraControl
 import com.huestone.shuddercam.controls.ControlId
 import com.huestone.shuddercam.controls.ControlValue
 import com.huestone.shuddercam.controls.EffectiveSettings
@@ -22,10 +23,15 @@ object ControlApplier {
 
     /**
      * Applies the resolved settings to the camera.
-     * Only writes exposure-related controls for now (C06); extended by later commits.
+     *
+     * Most controls are Camera2 capture-request options. Zoom and torch are
+     * owned by CameraX itself, so they go through [cameraControl] — writing
+     * CONTROL_ZOOM_RATIO / FLASH_MODE through interop would fight CameraX's
+     * own state for the same two knobs.
      */
     fun apply(
         camera2Control: Camera2CameraControl,
+        cameraControl: CameraControl,
         resolved: Map<ControlId, EffectiveSettings.Resolution>
     ) {
         val builder = CaptureRequestOptions.Builder()
@@ -175,8 +181,61 @@ object ControlApplier {
             }
         }
 
+        // ── Motion family (C09) ──
+
+        // FPS_RANGE
+        val fpsRes = resolved[ControlId.FPS_RANGE]
+        if (fpsRes is EffectiveSettings.Resolution.Resolved) {
+            val fps = fpsRes.value as? ControlValue.IntRangeValue
+            if (fps != null) {
+                builder.setCaptureRequestOption(
+                    CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE,
+                    Range(fps.lower, fps.upper)
+                )
+                applied = true
+                if (fpsRes.wasClamped) {
+                    Log.w(TAG, "FPS_RANGE clamped to ${fps.lower}-${fps.upper}")
+                }
+            }
+        }
+
+        // STABILIZATION_MODE
+        val stabRes = resolved[ControlId.STABILIZATION_MODE]
+        if (stabRes is EffectiveSettings.Resolution.Resolved) {
+            val mode = (stabRes.value as? ControlValue.IntValue)?.value
+            if (mode != null) {
+                builder.setCaptureRequestOption(
+                    CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
+                    mode
+                )
+                applied = true
+                if (stabRes.wasClamped) Log.w(TAG, "STABILIZATION_MODE clamped to $mode")
+            }
+        }
+
         if (applied) {
             camera2Control.setCaptureRequestOptions(builder.build())
+        }
+
+        // ── CameraX-owned controls ──
+
+        // ZOOM_RATIO
+        val zoomRes = resolved[ControlId.ZOOM_RATIO]
+        if (zoomRes is EffectiveSettings.Resolution.Resolved) {
+            val zoom = (zoomRes.value as? ControlValue.FloatValue)?.value
+            if (zoom != null) {
+                cameraControl.setZoomRatio(zoom)
+                if (zoomRes.wasClamped) Log.w(TAG, "ZOOM_RATIO clamped to $zoom")
+            }
+        }
+
+        // TORCH_MODE
+        val torchRes = resolved[ControlId.TORCH_MODE]
+        if (torchRes is EffectiveSettings.Resolution.Resolved) {
+            val torchOn = (torchRes.value as? ControlValue.BoolValue)?.value
+            if (torchOn != null) {
+                cameraControl.enableTorch(torchOn)
+            }
         }
     }
 }

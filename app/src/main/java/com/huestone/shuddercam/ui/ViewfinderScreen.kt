@@ -4,7 +4,6 @@ import android.Manifest
 import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
-import android.view.MotionEvent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.view.PreviewView
@@ -37,10 +36,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
@@ -185,33 +188,67 @@ fun ViewfinderScreen() {
             }
         }
 
-        Box(modifier = Modifier.fillMaxSize()) {
+        val zoomSpec = specs[ControlId.ZOOM_RATIO]
+        val zoomRange = zoomSpec?.floatRange ?: 1.0f..1.0f
+        val zoomEnabled = zoomSpec != null && zoomSpec.available &&
+            zoomRange.endInclusive > zoomRange.start
+
+        // Gesture handlers outlive the composition that created them, so they read
+        // the latest values rather than the ones captured when they were installed.
+        val currentResolved by rememberUpdatedState(resolved)
+        val currentIsMf by rememberUpdatedState(isMf)
+        var previewViewRef by remember { mutableStateOf<PreviewView?>(null) }
+
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .pointerInput(zoomEnabled, zoomRange) {
+                    if (!zoomEnabled) return@pointerInput
+                    detectTransformGestures { _, _, zoomChange, _ ->
+                        if (zoomChange != 1.0f) {
+                            val zoomRes = currentResolved[ControlId.ZOOM_RATIO]
+                                as? EffectiveSettings.Resolution.Resolved
+                            val currentZoom =
+                                (zoomRes?.value as? ControlValue.FloatValue)?.value ?: 1.0f
+                            val newZoom = (currentZoom * zoomChange).coerceIn(zoomRange)
+                            // Same override path the sheet's zoom slider writes to.
+                            scope.launch {
+                                prefs.setOverride(
+                                    ControlId.ZOOM_RATIO,
+                                    ControlValue.FloatValue(newZoom)
+                                )
+                            }
+                        }
+                    }
+                }
+                .pointerInput(Unit) {
+                    detectTapGestures { offset ->
+                        // Tap-to-focus fires only when NOT in manual focus mode
+                        if (!currentIsMf) {
+                            previewViewRef?.let { pv ->
+                                cameraController.tapToFocus(
+                                    pv.meteringPointFactory,
+                                    offset.x,
+                                    offset.y
+                                )
+                            }
+                        }
+                    }
+                }
+        ) {
             AndroidView(
                 modifier = Modifier.fillMaxSize(),
                 factory = { ctx ->
                     PreviewView(ctx).also { previewView ->
                         previewView.implementationMode =
                             PreviewView.ImplementationMode.COMPATIBLE
+                        previewViewRef = previewView
                         cameraController.bindToLifecycle(
                             lifecycleOwner,
                             previewView
                         ) { caps ->
                             allCaps = caps
                             specs = cameraController.specs
-                        }
-
-                        previewView.setOnTouchListener { view, event ->
-                            if (event.action == MotionEvent.ACTION_DOWN) {
-                                // Tap-to-focus fires only when NOT in manual focus mode
-                                if (!isMf) {
-                                    val factory = previewView.meteringPointFactory
-                                    cameraController.tapToFocus(factory, event.x, event.y)
-                                    view.performClick()
-                                }
-                                true
-                            } else {
-                                false
-                            }
                         }
                     }
                 }
@@ -341,6 +378,13 @@ private fun ExposureReadout(resolved: Map<ControlId, EffectiveSettings.Resolutio
             else -> "WB $awbMode"
         }
         displayParts.add(modeName)
+    }
+
+    // Zoom readout
+    val zoomRes = resolved[ControlId.ZOOM_RATIO] as? EffectiveSettings.Resolution.Resolved
+    val currentZoom = (zoomRes?.value as? ControlValue.FloatValue)?.value ?: 1.0f
+    if (currentZoom > 1.05f) {
+        displayParts.add(String.format("%.1fx", currentZoom))
     }
 
     if (displayParts.isNotEmpty()) {

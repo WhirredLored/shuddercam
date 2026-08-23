@@ -34,7 +34,8 @@ data class ControlSpec(
     val longRange: LongRange? = null,
     val floatRange: ClosedFloatingPointRange<Float>? = null,
     val allowedIntValues: List<Int>? = null,
-    val allowedStringValues: List<String>? = null
+    val allowedStringValues: List<String>? = null,
+    val allowedIntRangeValues: List<Pair<Int, Int>>? = null
 ) {
     companion object {
         /**
@@ -127,18 +128,24 @@ data class ControlSpec(
                 available = caps.flashAvailable
             )
 
-            // FPS_RANGE
+            // FPS_RANGE: only the ranges the device actually reports are selectable
+            val fpsOptions = caps.supportedFpsRanges
+                .distinct()
+                .sortedWith(compareBy({ it.second }, { it.first }))
             specs[ControlId.FPS_RANGE] = ControlSpec(
                 id = ControlId.FPS_RANGE,
-                available = caps.supportedFpsRanges.isNotEmpty()
+                available = fpsOptions.isNotEmpty(),
+                allowedIntRangeValues = fpsOptions.ifEmpty { null }
             )
 
-            // STABILIZATION_MODE
-            val hasStab = caps.availableVideoStabilizationModes.size > 1 ||
-                caps.availableOpticalStabilizationModes.size > 1
+            // STABILIZATION_MODE: probed video stabilization modes. A device that
+            // reports a single mode has nothing to choose, so the control is absent.
+            val stabModes = caps.availableVideoStabilizationModes.distinct().sorted()
+            val hasStab = stabModes.size > 1
             specs[ControlId.STABILIZATION_MODE] = ControlSpec(
                 id = ControlId.STABILIZATION_MODE,
-                available = hasStab
+                available = hasStab,
+                allowedIntValues = if (hasStab) stabModes else null
             )
 
             // CAPTURE_FORMAT

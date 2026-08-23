@@ -33,8 +33,16 @@ object EffectiveSettings {
         val raw = override ?: activePreset.value(id)
 
         if (raw == null) {
-            // Device auto — no explicit value
-            return Resolution.Resolved(deviceAuto(id))
+            // Device auto — no explicit value.
+            val auto = deviceAuto(id)
+            // Range-typed defaults are meaningless unless they name one of the
+            // probed options, so snap them; other defaults keep their sentinel
+            // semantics (ISO 0 / shutter 0 = "let the device decide").
+            if (auto is ControlValue.IntRangeValue) {
+                val snapped = clamp(auto, spec)
+                if (snapped is Resolution.Resolved) return Resolution.Resolved(snapped.value)
+            }
+            return Resolution.Resolved(auto)
         }
 
         // Clamp to spec bounds
@@ -139,7 +147,28 @@ object EffectiveSettings {
                 }
             }
             is ControlValue.BoolValue -> Resolution.Resolved(value)
-            is ControlValue.IntRangeValue -> Resolution.Resolved(value)
+            is ControlValue.IntRangeValue -> {
+                val allowed = spec.allowedIntRangeValues
+                if (allowed.isNullOrEmpty()) {
+                    Resolution.Resolved(value)
+                } else {
+                    val requested = value.lower to value.upper
+                    if (requested in allowed) {
+                        Resolution.Resolved(value)
+                    } else {
+                        // Nearest by total endpoint distance; ties go to the
+                        // first option in the probed order.
+                        val nearest = allowed.minByOrNull {
+                            kotlin.math.abs(it.first - value.lower) +
+                                kotlin.math.abs(it.second - value.upper)
+                        }!!
+                        Resolution.Resolved(
+                            ControlValue.IntRangeValue(nearest.first, nearest.second),
+                            wasClamped = true
+                        )
+                    }
+                }
+            }
         }
     }
 }

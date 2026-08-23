@@ -108,14 +108,6 @@ class CameraController(private val context: Context) {
         preview = null
     }
 
-    fun setZoomRatio(ratio: Float) {
-        cameraControl?.setZoomRatio(ratio)
-    }
-
-    fun enableTorch(enabled: Boolean) {
-        cameraControl?.enableTorch(enabled)
-    }
-
     /**
      * Tap-to-focus: creates a metering point from the given coordinates
      * and starts a focus/metering action.
@@ -130,9 +122,9 @@ class CameraController(private val context: Context) {
      * Applies resolved effective settings to the camera via ControlApplier.
      */
     fun applySettings(resolved: Map<ControlId, EffectiveSettings.Resolution>) {
-        camera2Control?.let { c2c ->
-            ControlApplier.apply(c2c, resolved)
-        }
+        val c2c = camera2Control ?: return
+        val cc = cameraControl ?: return
+        ControlApplier.apply(c2c, cc, resolved)
     }
 
     /**

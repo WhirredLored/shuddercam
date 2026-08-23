@@ -17,6 +17,8 @@
 
 | C13 | PASS* | User presets as a separate DataStore layer: save-current snapshot, rename/delete via long-press menu, Slate chips, clamp-on-load, 15 JVM tests; deferred: device verification of save/rename/delete and survival across restart |
 
+| C14 | PASS* | Edgeless fullscreen: hidden system bars with transient-swipe behaviour, cutout ALWAYS/SHORT_EDGES, FILL_CENTER preview, tap-reveal chrome fading after 4s, double-tap exit, keep-screen-on, persisted across cold start; deferred: notched-device verification of edge-to-edge coverage, no inset jump, and rotation without a flash |
+
 ## Milestone gates
 
 **M2 — Manual Control Engine [C05–C11] → tagged v0.2.0 (2026-08-23). GATE DEFERRED.**

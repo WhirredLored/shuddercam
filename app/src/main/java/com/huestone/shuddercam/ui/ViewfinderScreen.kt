@@ -1,6 +1,7 @@
 package com.huestone.shuddercam.ui
 
 import android.Manifest
+import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.graphics.BitmapFactory
@@ -11,10 +12,14 @@ import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.view.PreviewView
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -28,6 +33,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Button
@@ -58,6 +65,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -74,6 +82,7 @@ import com.huestone.shuddercam.controls.Preset
 import com.huestone.shuddercam.controls.PresetCodec
 import com.huestone.shuddercam.controls.Presets
 import com.huestone.shuddercam.data.Prefs
+import com.huestone.shuddercam.util.EdgelessController
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -93,6 +102,8 @@ fun ViewfinderScreen() {
     var isFocusTouching by remember { mutableStateOf(false) }
     var previewViewRef by remember { mutableStateOf<PreviewView?>(null) }
     var isAbHolding by remember { mutableStateOf(false) }
+    var chromeRevealToken by remember { mutableStateOf(0) }
+    var chromeVisible by remember { mutableStateOf(false) }
     var isCapturing by remember { mutableStateOf(false) }
     var isBlinking by remember { mutableStateOf(false) }
     var lastShotUri by remember { mutableStateOf<Uri?>(null) }
@@ -104,6 +115,7 @@ fun ViewfinderScreen() {
 
     val prefs = remember { Prefs(context) }
     val overrides by prefs.overrides.collectAsState(initial = emptyMap())
+    val isEdgeless by prefs.edgeless.collectAsState(initial = false)
     val activePresetId by prefs.activePresetId.collectAsState(initial = Presets.DEVICE_AUTO.id)
     val userPresets by prefs.userPresets.collectAsState(initial = emptyList())
     // Deleting the active user preset leaves an id nobody claims, which falls back
@@ -132,6 +144,27 @@ fun ViewfinderScreen() {
             permanentlyDenied = true
         }
         hasRequestedOnce = true
+    }
+
+    // Window-level only: edgeless never touches the camera settings flow (Law 4).
+    val view = LocalView.current
+    LaunchedEffect(isEdgeless, view) {
+        (context as? Activity)?.let { activity ->
+            EdgelessController.apply(activity, isEdgeless, view)
+        }
+    }
+
+    // The revealed chrome fades on its own; each fresh tap restarts the clock.
+    LaunchedEffect(chromeVisible, chromeRevealToken) {
+        if (chromeVisible) {
+            delay(CHROME_REVEAL_MS)
+            chromeVisible = false
+        }
+    }
+
+    // Leaving edgeless hands the chrome back permanently.
+    LaunchedEffect(isEdgeless) {
+        if (!isEdgeless) chromeVisible = false
     }
 
     // Pre-Q writes go through a file path, which needs the storage permission.
@@ -318,16 +351,31 @@ fun ViewfinderScreen() {
                         }
                     }
                 }
-                .pointerInput(Unit) {
-                    detectTapGestures { offset ->
-                        // Tap-to-focus fires only when NOT in manual focus mode
-                        if (!currentIsMf) {
-                            previewViewRef?.let { pv ->
-                                cameraController.tapToFocus(
-                                    pv.meteringPointFactory,
-                                    offset.x,
-                                    offset.y
-                                )
+                .pointerInput(isEdgeless) {
+                    if (isEdgeless) {
+                        // Edgeless owns the tap: one reveals the floating chrome,
+                        // two exit. Focus keeps its gesture outside this mode so it
+                        // never waits on the double-tap timeout.
+                        detectTapGestures(
+                            onTap = {
+                                chromeVisible = true
+                                chromeRevealToken++
+                            },
+                            onDoubleTap = {
+                                scope.launch { prefs.setEdgeless(false) }
+                            }
+                        )
+                    } else {
+                        detectTapGestures { offset ->
+                            // Tap-to-focus fires only when NOT in manual focus mode
+                            if (!currentIsMf) {
+                                previewViewRef?.let { pv ->
+                                    cameraController.tapToFocus(
+                                        pv.meteringPointFactory,
+                                        offset.x,
+                                        offset.y
+                                    )
+                                }
                             }
                         }
                     }
@@ -339,6 +387,9 @@ fun ViewfinderScreen() {
                     PreviewView(ctx).also { previewView ->
                         previewView.implementationMode =
                             PreviewView.ImplementationMode.COMPATIBLE
+                        // Center-crop to the panel: accept the crop rather than
+                        // letterboxing or stretching the frame.
+                        previewView.scaleType = PreviewView.ScaleType.FILL_CENTER
                         previewViewRef = previewView
                         cameraController.bindToLifecycle(
                             lifecycleOwner,
@@ -382,37 +433,50 @@ fun ViewfinderScreen() {
                 }
             }
 
-            // Top bar: exposure readout chip + info/controls icons
-            Row(
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .fillMaxWidth()
-                    .padding(12.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // Exposure readout chip
-                ExposureReadout(resolved)
+            // Top bar: exposure readout chip + edgeless/controls/info icons.
+            // Every piece of it is gone while edgeless — any chrome breaks the illusion.
+            if (!isEdgeless) {
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .fillMaxWidth()
+                        .padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Exposure readout chip
+                    ExposureReadout(resolved)
 
-                Spacer(modifier = Modifier.weight(1f))
+                    Spacer(modifier = Modifier.weight(1f))
 
-                // Controls toggle
-                IconButton(onClick = { showControls = !showControls }) {
-                    Icon(
-                        imageVector = Icons.Default.Tune,
-                        contentDescription = "Controls",
-                        tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f),
-                        modifier = Modifier.size(24.dp)
-                    )
-                }
+                    // Edgeless toggle
+                    IconButton(onClick = { scope.launch { prefs.setEdgeless(true) } }) {
+                        Icon(
+                            imageVector = Icons.Default.Fullscreen,
+                            contentDescription = "Edgeless mode",
+                            tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f),
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
 
-                // Info icon
-                IconButton(onClick = { showDiagnostics = true }) {
-                    Icon(
-                        imageVector = Icons.Default.Info,
-                        contentDescription = "Camera Diagnostics",
-                        tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f),
-                        modifier = Modifier.size(24.dp)
-                    )
+                    // Controls toggle
+                    IconButton(onClick = { showControls = !showControls }) {
+                        Icon(
+                            imageVector = Icons.Default.Tune,
+                            contentDescription = "Controls",
+                            tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f),
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+
+                    // Info icon
+                    IconButton(onClick = { showDiagnostics = true }) {
+                        Icon(
+                            imageVector = Icons.Default.Info,
+                            contentDescription = "Camera Diagnostics",
+                            tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f),
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
                 }
             }
 
@@ -429,7 +493,7 @@ fun ViewfinderScreen() {
             // Bottom stack: controls sheet (when open) above the always-present
             // shutter bar, so capture works in every mode.
             Column(modifier = Modifier.align(Alignment.BottomCenter)) {
-                if (showControls && specs.isNotEmpty()) {
+                if ((!isEdgeless || chromeVisible) && showControls && specs.isNotEmpty()) {
                     ControlsSheet(
                         specs = specs,
                         resolved = resolved,
@@ -469,16 +533,95 @@ fun ViewfinderScreen() {
                     )
                 }
 
-                CaptureBar(
-                    thumbnail = lastShotThumb,
-                    isCapturing = isCapturing,
-                    errorMessage = captureError,
-                    onShutter = onShutter,
-                    onThumbnailClick = {
-                        lastShotUri?.let { uri -> openInSystemViewer(context, uri) }
+                if (!isEdgeless) {
+                    CaptureBar(
+                        thumbnail = lastShotThumb,
+                        isCapturing = isCapturing,
+                        errorMessage = captureError,
+                        onShutter = onShutter,
+                        onThumbnailClick = {
+                            lastShotUri?.let { uri -> openInSystemViewer(context, uri) }
+                        }
+                    )
+                } else {
+                    // Minimal floating layer: shutter, sheet handle, exit. Fades
+                    // out on its own so the panel returns to pure image.
+                    AnimatedVisibility(
+                        visible = chromeVisible,
+                        enter = fadeIn(),
+                        exit = fadeOut()
+                    ) {
+                        EdgelessChrome(
+                            isCapturing = isCapturing,
+                            onShutter = {
+                                chromeRevealToken++
+                                onShutter()
+                            },
+                            onToggleSheet = {
+                                showControls = !showControls
+                                chromeRevealToken++
+                            },
+                            onExit = { scope.launch { prefs.setEdgeless(false) } }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** How long revealed chrome lingers before fading, per C14. */
+private const val CHROME_REVEAL_MS = 4000L
+
+/**
+ * The only chrome edgeless mode ever shows: shutter, sheet handle, and a way
+ * out. Double-tapping the preview leaves edgeless too.
+ */
+@Composable
+private fun EdgelessChrome(
+    isCapturing: Boolean,
+    onShutter: () -> Unit,
+    onToggleSheet: () -> Unit,
+    onExit: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(24.dp),
+        horizontalArrangement = Arrangement.SpaceEvenly,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        IconButton(onClick = onToggleSheet, modifier = Modifier.size(48.dp)) {
+            Icon(
+                imageVector = Icons.Default.Tune,
+                contentDescription = "Controls",
+                tint = MaterialTheme.colorScheme.onBackground,
+                modifier = Modifier.size(24.dp)
+            )
+        }
+
+        Box(
+            modifier = Modifier
+                .size(64.dp)
+                .clip(CircleShape)
+                .background(
+                    if (isCapturing) {
+                        MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
+                    } else {
+                        MaterialTheme.colorScheme.primary
                     }
                 )
-            }
+                .border(3.dp, MaterialTheme.colorScheme.onBackground, CircleShape)
+                .clickable(enabled = !isCapturing) { onShutter() }
+        )
+
+        IconButton(onClick = onExit, modifier = Modifier.size(48.dp)) {
+            Icon(
+                imageVector = Icons.Default.FullscreenExit,
+                contentDescription = "Exit edgeless mode",
+                tint = MaterialTheme.colorScheme.onBackground,
+                modifier = Modifier.size(24.dp)
+            )
         }
     }
 }

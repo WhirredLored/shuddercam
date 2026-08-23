@@ -30,6 +30,7 @@ class Prefs(private val context: Context) {
     companion object {
         private val KEY_ACTIVE_PRESET = stringPreferencesKey("active_preset_id")
         private val KEY_USER_PRESETS = stringSetPreferencesKey("user_presets")
+        private val KEY_EDGELESS = booleanPreferencesKey("edgeless")
 
         // Override keys - typed per control
         private val KEY_AE_MODE = intPreferencesKey("override_ae_mode")
@@ -82,6 +83,17 @@ class Prefs(private val context: Context) {
         prefs[KEY_GRID_OVERLAY]?.let { map[ControlId.GRID_OVERLAY] = ControlValue.BoolValue(it) }
 
         map
+    }
+
+    /** Edgeless survives a cold start — the app may open straight into it. */
+    val edgeless: Flow<Boolean> = context.dataStore.data.map { prefs ->
+        prefs[KEY_EDGELESS] ?: false
+    }
+
+    suspend fun setEdgeless(enabled: Boolean) {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_EDGELESS] = enabled
+        }
     }
 
     /**

@@ -12,18 +12,21 @@
 | C09 | PASS* | Zoom (pinch + slider on one override path), torch, frame rate and stabilization gated to probed options; deferred: device verification of pinch/slider sync, torch, and FPS cadence change |
 | C10 | PASS* | Still capture to Pictures/ShudderCam via MediaStore, flash-at-capture, blink + shutter sound + thumbnail handoff; JPEG-only (no DNG on CameraX 1.4.1); deferred: device verification that manual settings reach the capture request, EXIF orientation, and filename/timestamp |
 | C11 | PASS* | Tabbed control panel (Exposure/Focus/WB/Motion/Capture), per-control reset glyphs, reset-all with confirmation, press-and-hold A/B preset audition; deferred: device verification of glyph behaviour and the A/B hold rendering |
-
 | C12 | PASS* | Five immutable built-in presets (Device Auto, Night Hand-held, Long Exposure, Daylight Crisp, UV Hunt) with descriptions, selector chips, persisted active id, 15 JVM tests across FULL and LIMITED caps; deferred: device verification that each preset visibly changes the preview per its description |
-
 | C13 | PASS* | User presets as a separate DataStore layer: save-current snapshot, rename/delete via long-press menu, Slate chips, clamp-on-load, 15 JVM tests; deferred: device verification of save/rename/delete and survival across restart |
-
 | C14 | PASS* | Edgeless fullscreen: hidden system bars with transient-swipe behaviour, cutout ALWAYS/SHORT_EDGES, FILL_CENTER preview, tap-reveal chrome fading after 4s, double-tap exit, keep-screen-on, persisted across cold start; deferred: notched-device verification of edge-to-edge coverage, no inset jump, and rotation without a flash |
-
 | C15 | PASS* | TrueSight: calibration composed into zoom inside the resolver, drag-to-calibrate flow with edge rulers, per-orientation persistence, TS badge, zoom reset to calibrated 1:1, Settings screen with recalibrate and brightness assist, 11 JVM tests; deferred: arm's-length verification that a hand behind the phone reads life-size and continuous |
-
 | C16 | PASS* | Thermal governor (tier policy pure and unit-tested, applied during resolution so recovery is automatic), battery readout with one low warning, allocation audit documented in ViewfinderScreen, settings and window mode restated on resume, 16 JVM tests; deferred: 45-minute soak and observing the tiers on real hardware |
+| C17 | PASS* | Release packaging: versionName 1.0.0, optional signing from gitignored keystore.properties (documented in README), R8 + resource shrinking with keep rules verified against the mapping file, store listing and privacy policy written from the merged manifest; deferred: running the minified APK through the full flow. NOTE: `lintVitalRelease` could not execute here — its own artifacts time out downloading from dl.google.com — so `assembleRelease` was verified with the lint tasks excluded. Two real defects the check would have flagged were found by inspection and fixed in `9de2e48`; the human must run a full `assembleRelease` once on a networked machine |
 
 ## Milestone gates
+
+**M1 — Foundation [C01–C04] → tagged v0.1.0. GATE DEFERRED.**
+Recorded here retrospectively: the tag was made without a gate note.
+1. The app runs on two physically different devices.
+2. The diagnostics screen reports genuinely different supported ranges on each — identical
+   output on two different phones would mean the probe is returning defaults, not hardware.
+3. No control UI exists at that tag, which is correct for M1.
 
 **M2 — Manual Control Engine [C05–C11] → tagged v0.2.0 (2026-08-23). GATE DEFERRED.**
 The exit gate needs physical hardware and cannot be run here. A human must check:
@@ -57,3 +60,17 @@ Needs a notched or punch-hole device and an arm's-length judgement no emulator c
    continuous with the real hand across the bezel; the factor survives a restart; pinch still
    zooms on top of it and the reset returns to calibrated 1:1; portrait and landscape each hold
    their own factor.
+
+**M5 — Hardening & Ship [C16–C17] → tagged v1.0.0 (2026-08-23). GATE DEFERRED.**
+Needs sustained runtime and a networked build machine:
+1. A 45-minute continuous preview session with no thermal shutdown, and the governor tiers
+   observable as the device heats and cools (`adb logcat -s ThermalGovernor`). Presets and
+   calibration must survive throttling untouched.
+2. Background and foreground in every mode — especially TrueSight — restores the actual camera
+   behaviour, not just the UI labels.
+3. `./gradlew assembleRelease` with lint reachable, then install the minified APK and run the
+   whole flow: manual exposure → capture → save a preset → restart → load that preset →
+   edgeless → TrueSight calibration. The preset load is the one that matters: R8 renaming
+   would break saved-preset deserialization and it only shows at runtime.
+4. Listing and privacy policy still match behaviour, and the two placeholders in `store/`
+   (privacy policy URL, contact address) are replaced before submission.

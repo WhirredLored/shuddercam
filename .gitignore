@@ -9,9 +9,10 @@ build/
 # Local configuration
 local.properties
 
-# Keystores
+# Keystores and signing credentials — never commit these
 *.jks
 *.keystore
+keystore.properties
 
 # OS
 .DS_Store
@@ -20,5 +21,12 @@ Thumbs.db
 # Archives
 *.zip
 
-# Captured images
+# Captured images — test shots never belong in version control.
+# Scoped to what the app itself produces, so store screenshots added to store/
+# later are not silently ignored.
 captures/
+SC_*.jpg
+SC_*.dng
+
+# Kotlin compiler error dumps
+.kotlin/

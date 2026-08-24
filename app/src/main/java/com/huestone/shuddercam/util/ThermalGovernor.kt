@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Build
 import android.os.PowerManager
 import android.util.Log
+import androidx.annotation.RequiresApi
 import com.huestone.shuddercam.controls.ThermalTier
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
@@ -36,23 +37,31 @@ object ThermalGovernor {
         val power = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
             ?: return flowOf(ThermalTier.NORMAL)
 
-        return callbackFlow {
-            trySend(tierFor(power.currentThermalStatus))
-
-            val listener = PowerManager.OnThermalStatusChangedListener { status ->
-                val tier = tierFor(status)
-                Log.i(TAG, "Thermal status $status -> $tier")
-                trySend(tier)
-            }
-            power.addThermalStatusListener(listener)
-
-            awaitClose { power.removeThermalStatusListener(listener) }
-        }.distinctUntilChanged()
+        return observeFrom(power)
     }
+
+    /**
+     * The Q+ half, split out so the version guard is visible to the compiler and
+     * to lint: the thermal API is used only from a function that declares it.
+     */
+    @RequiresApi(Build.VERSION_CODES.Q)
+    private fun observeFrom(power: PowerManager): Flow<ThermalTier> = callbackFlow {
+        trySend(tierFor(power.currentThermalStatus))
+
+        val listener = PowerManager.OnThermalStatusChangedListener { status ->
+            val tier = tierFor(status)
+            Log.i(TAG, "Thermal status $status -> $tier")
+            trySend(tier)
+        }
+        power.addThermalStatusListener(listener)
+
+        awaitClose { power.removeThermalStatusListener(listener) }
+    }.distinctUntilChanged()
 
     /**
      * Maps a PowerManager thermal status onto the tier that governs behaviour.
      */
+    @RequiresApi(Build.VERSION_CODES.Q)
     fun tierFor(status: Int): ThermalTier = when {
         status <= PowerManager.THERMAL_STATUS_LIGHT -> ThermalTier.NORMAL
         status == PowerManager.THERMAL_STATUS_MODERATE -> ThermalTier.MODERATE

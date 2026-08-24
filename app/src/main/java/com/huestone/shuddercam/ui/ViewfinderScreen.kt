@@ -835,8 +835,15 @@ private fun rememberBatteryPercent(): Int? {
             }
         }
         val filter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
-        // The sticky broadcast delivers the current level immediately.
-        context.registerReceiver(receiver, filter)
+        // The sticky broadcast delivers the current level immediately. Android 14
+        // requires the export flag; this one is a protected system broadcast, so
+        // nothing outside the system should ever reach it.
+        ContextCompat.registerReceiver(
+            context,
+            receiver,
+            filter,
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        )
         onDispose { runCatching { context.unregisterReceiver(receiver) } }
     }
 

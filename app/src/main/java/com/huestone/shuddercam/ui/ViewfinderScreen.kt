@@ -31,7 +31,9 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
@@ -604,6 +606,11 @@ fun ViewfinderScreen() {
                     modifier = Modifier
                         .align(Alignment.TopCenter)
                         .fillMaxWidth()
+                        // The preview owns the panel edge to edge in every mode, so
+                        // the chrome is what has to step around the system bars.
+                        // Only outside edgeless: there the bars are hidden and any
+                        // inset here would be the jump C14 forbids.
+                        .statusBarsPadding()
                         .padding(12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -672,7 +679,12 @@ fun ViewfinderScreen() {
                 Column(
                     modifier = Modifier
                         .align(Alignment.TopCenter)
-                        .padding(top = if (isEdgeless) 24.dp else 64.dp)
+                        .then(
+                            if (isEdgeless) Modifier else Modifier.statusBarsPadding()
+                        )
+                        // Clear of the header row outside edgeless; a small drop
+                        // from the top edge inside it.
+                        .padding(top = if (isEdgeless) 24.dp else 56.dp)
                 ) {
                     if (thermalTier == ThermalTier.SEVERE) {
                         StatusBanner(
@@ -701,7 +713,14 @@ fun ViewfinderScreen() {
 
             // Bottom stack: controls sheet (when open) above the always-present
             // shutter bar, so capture works in every mode.
-            Column(modifier = Modifier.align(Alignment.BottomCenter)) {
+            Column(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    // Keeps the shutter clear of the gesture bar outside edgeless.
+                    .then(
+                        if (isEdgeless) Modifier else Modifier.navigationBarsPadding()
+                    )
+            ) {
                 if (!isCalibrating &&
                     (!isEdgeless || chromeVisible) &&
                     showControls &&
